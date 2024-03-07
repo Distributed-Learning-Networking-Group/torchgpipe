@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from copy import deepcopy
 import time
+from warnings import catch_warnings
 
 import pytest
 import torch
@@ -107,7 +108,7 @@ def test_batch_size_indivisible():
     model = nn.Sequential(nn.Linear(1, 1))
     model = GPipe(model, balance=[1], devices=['cpu'], chunks=4)
 
-    with pytest.warns(None) as record:
+    with catch_warnings (record=True) as record:
         model(torch.rand(7, 1))
 
     # Indivisible batch size is legal.
@@ -118,7 +119,7 @@ def test_batch_size_small():
     model = nn.Sequential(nn.Linear(1, 1))
     model = GPipe(model, balance=[1], devices=['cpu'], chunks=4)
 
-    with pytest.warns(None) as record:
+    with catch_warnings (record=True) as record:
         model(torch.rand(2, 1))
 
     # Batch size smaller than chunks is legal.
