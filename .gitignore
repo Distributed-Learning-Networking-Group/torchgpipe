@@ -144,4 +144,6 @@ tags
 # Persistent undo
 [._]*.un~
 
+data
+
 # End of https://www.gitignore.io/api/vim,python
