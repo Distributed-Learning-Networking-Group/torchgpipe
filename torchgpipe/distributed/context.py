@@ -17,6 +17,7 @@ class TrainingContext:
     def __init__(self, name: str) -> None:
         self.forward_channels: Dict[int, Channel] = {}
         self.backward_channels: Dict[int, Channel] = {}
+        self.target_channels: Dict[int, Channel] = {}
         self.name = name
 
 
@@ -59,11 +60,21 @@ def put_backward(name: str, id: int, value: TensorOrTensors):
     return ctx.forward_channels.setdefault(id, Queue()).put(value)
 
 
+def put_target(name: str, id: int, value: TensorOrTensors) -> TensorOrTensors:
+    ctx = GlobalContext.get_context(name)
+    return ctx.target_channels.setdefault(id, Queue()).put(value)
+
+
 def get_forward(name: str, id: int) -> TensorOrTensors:
     ctx = GlobalContext.get_context(name)
     return ctx.forward_channels.setdefault(id, Queue()).get()
 
 
 def get_backward(name: str, id: int) -> TensorOrTensors:
+    ctx = GlobalContext.get_context(name)
+    return ctx.forward_channels.setdefault(id, Queue()).get()
+
+
+def get_target(name: str, id: int) -> TensorOrTensors:
     ctx = GlobalContext.get_context(name)
     return ctx.forward_channels.setdefault(id, Queue()).get()

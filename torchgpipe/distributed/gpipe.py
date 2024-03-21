@@ -148,31 +148,67 @@ class DistributedGPipe:
             assert self.rank == (self.world_size - 1)
             loss.backward()
         else:
-            values = DistributedGPipe._get(self.name, mbatch)
+            values = DistributedGPipe._get(self.name, mbatch, True)
             values = to(self.device, values)
             autograd.backward(self._outputs[mbatch], values)
         prev_worker = self._previous_worker()
         if prev_worker is not None:
             leaves = self._grad_output.get()
             to(torch.device("cpu"), leaves)
-            DistributedGPipe._put(prev_worker, mbatch, leaves)
+            DistributedGPipe._put(prev_worker, mbatch, leaves, True)
 
 
 class DistributedGPipeDataLoader:
 
+    @staticmethod
+    def _put(name: str, id: int, value: TensorOrTensors):
+        rpc.remote(
+            name, context.put_target, (name, id, value)
+        )
+
+    @staticmethod
+    def _get(name: str, id: int):
+        return context.get_target(name, id)
+
     def __init__(self,
                  data_loader: Optional[data.DataLoader],
                  rank: int,
-                 chunks: int
+                 chunks: int,
+                 num_iterations: int,
+                 last_stage: bool,
+                 last_stage_name: str,
                  ):
         self._data_loader = data_loader
         self._rank = rank
         self._chunks = chunks
+        self._num_iterations = num_iterations
+        self._iter_cnt = 0
+        self._last_stage = last_stage
+        self._last_stage_name = last_stage_name
+
+    def _last_stage_iter(self):
+        for _ in range(self._num_iterations):
+            for mbatch in range(self._chunks):
+                mtarget = DistributedGPipeDataLoader._get(self._last_stage_name, mbatch)
+                yield (None, mtarget)
+
+    def _first_stage_iter(self):
+        for (data, target), _ in zip(self._data_loader, range(self._num_iterations)):
+            batches = microbatch.scatter((data, target), self._chunks)
+            for mbatch, (mdata, mtarget) in enumerate(batches):
+                DistributedGPipeDataLoader._put(self._last_stage_name, mbatch, mtarget)
+                yield (mdata, None)
+
+    def _middle_stage_iter(self):
+        for _ in range(self._num_iterations * self._chunks):
+            yield (None, None)
 
     def __iter__(self):
-        if self._rank != 0:
-            return None, None
-        for data in self._data_loader:
-            batches = microbatch.scatter(data, self._chunks)
-            for batch in batches:
-                yield batch.value
+        if self._last_stage:
+            return self._last_stage_iter()
+        if self._rank == 0:
+            return self._first_stage_iter()
+        return self._middle_stage_iter()
+
+    def __len__(self):
+        return self._num_iterations

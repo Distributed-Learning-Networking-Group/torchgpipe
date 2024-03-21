@@ -5,8 +5,9 @@ from unittest.mock import patch
 import pytest
 import torch
 from torch import nn
-from torch.utils import data
+import torch.utils
 import torchvision
+from torch.utils.data import dataloader
 
 from torchgpipe.checkpoint import TensorOrTensors
 from torchgpipe.distributed.context import TrainingContext
@@ -115,17 +116,31 @@ def test_pipeline(module, workers, balance):
             partitions[i].backward(0, loss_v)
 
 
-@pytest.mark.parametrize("batch_size,chunks", [[32, 8]])
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("batch_size,chunks", [[32, 3]])
 def test_distributed_data_loader(batch_size: int, chunks: int):
-    trans = torchvision.transforms.ToTensor()
-    mnist_train = torchvision.datasets.FashionMNIST(
-        root="./data", train=True, transform=trans, download=True)
-    train_iter = data.DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
-    batch_num = len(train_iter)
-    train_iter = data.DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
+    import torchgpipe.distributed.context as context
+    global_ctx = FakeTrainingGloablContext()
+    with patch.object(DistributedGPipeDataLoader, "_put", global_ctx.fake_put), \
+            patch.object(DistributedGPipeDataLoader, "_get", global_ctx.fake_get):
+        trans = torchvision.transforms.ToTensor()
+        mnist_train = torchvision.datasets.FashionMNIST(
+            root="./data", train=True, transform=trans, download=True)
+        train_iter = dataloader.DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
 
-    loader = DistributedGPipeDataLoader(train_iter, 0, chunks)
-    cnt = 0
-    for _ in loader:
-        cnt += 1
-    assert cnt == batch_num * chunks
+        num_iteration = 1000
+        loader0 = DistributedGPipeDataLoader(
+            train_iter, 0, chunks, num_iteration, False, "worker2")
+        loader1 = DistributedGPipeDataLoader(
+            train_iter, 1, chunks, num_iteration, False, "worker2")
+        loader2 = DistributedGPipeDataLoader(
+            train_iter, 2, chunks, num_iteration, True, "worker2")
+        cnt = 0
+
+        for d0, d1, d2 in zip(loader0, loader1, loader2):
+            assert d0[0] is not None and d0[1] is None
+            assert d1[0] is None and d1[1] is None
+            assert d2[0] is None and d2[1] is not None
+            cnt += 1
+
+        assert cnt == (num_iteration * chunks)
