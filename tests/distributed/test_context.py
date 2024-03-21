@@ -57,19 +57,20 @@ def test_restart():
 
 
 @distributed("worker0")
-def _test_single_decorator(data):
-    _test_kv("worker0", data)
+def _test_single_decorator(data, put, get):
+    _test_kv("worker0", data, put, get)
 
 
 @distributed("worker0")
 @distributed("worker1")
 @distributed("worker2")
-def _test_double_decorator(data):
-    _test_kv("worker0", data)
-    _test_kv("worker1", data)
-    _test_kv("worker2", data)
+def _test_double_decorator(data, put, get):
+    _test_kv("worker0", data, put, get)
+    _test_kv("worker1", data, put, get)
+    _test_kv("worker2", data, put, get)
 
 
-def test_decorator(data):
-    _test_single_decorator(data)
-    _test_double_decorator(data)
+@pytest.mark.parametrize("put,get", [[put_forward, get_forward], [put_backward, get_backward]])
+def test_decorator(data, put, get):
+    _test_single_decorator(data, put, get)
+    _test_double_decorator(data, put, get)
