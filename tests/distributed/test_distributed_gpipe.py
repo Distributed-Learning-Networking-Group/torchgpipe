@@ -42,7 +42,7 @@ class FakeTrainingGloablContext:
             channels = ctx.backward_channels
         else:
             channels = ctx.forward_channels
-        return channels.setdefault(id, Queue()).get()
+        return channels[id].get()
 
     def fake_put(self, name: str, id: int, value: Any, backward=False):
         ctx = self.ctxs.setdefault(name, TrainingContext(name))
@@ -51,7 +51,7 @@ class FakeTrainingGloablContext:
         else:
             channels = ctx.forward_channels
         value = detach(value)
-        return channels.setdefault(id, Queue()).put(value)
+        return channels[id].put(value)
 
 
 @pytest.fixture
