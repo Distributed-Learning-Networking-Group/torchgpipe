@@ -2,6 +2,7 @@
 """
 
 from contextlib import contextmanager
+import os
 from queue import Queue
 from typing import Callable, Dict, Tuple, Union
 
@@ -15,9 +16,9 @@ Channel = Queue[TensorOrTensors]
 class TrainingContext:
 
     def __init__(self, name: str) -> None:
-        self.forward_channels: Dict[int, Channel] = {}
-        self.backward_channels: Dict[int, Channel] = {}
-        self.target_channels: Dict[int, Channel] = {}
+        self.forward_channels = [Channel() for _ in range(32)]
+        self.backward_channels = [Channel() for _ in range(32)]
+        self.target_channels: Dict[int, Channel] = [Channel() for _ in range(32)]
         self.name = name
 
 
@@ -52,29 +53,29 @@ def distributed(name: str):
 
 def put_forward(name: str, id: int, value: TensorOrTensors):
     ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels.setdefault(id, Queue()).put(value)
-
-
-def put_backward(name: str, id: int, value: TensorOrTensors):
-    ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels.setdefault(id, Queue()).put(value)
-
-
-def put_target(name: str, id: int, value: TensorOrTensors) -> TensorOrTensors:
-    ctx = GlobalContext.get_context(name)
-    return ctx.target_channels.setdefault(id, Queue()).put(value)
+    ctx.forward_channels[id].put(value)
 
 
 def get_forward(name: str, id: int) -> TensorOrTensors:
     ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels.setdefault(id, Queue()).get()
+    return ctx.forward_channels[id].get()
+
+
+def put_backward(name: str, id: int, value: TensorOrTensors):
+    ctx = GlobalContext.get_context(name)
+    return ctx.backward_channels[id].put(value)
 
 
 def get_backward(name: str, id: int) -> TensorOrTensors:
     ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels.setdefault(id, Queue()).get()
+    return ctx.backward_channels[id].get()
+
+
+def put_target(name: str, id: int, value: TensorOrTensors) -> TensorOrTensors:
+    ctx = GlobalContext.get_context(name)
+    return ctx.target_channels[id].put(value)
 
 
 def get_target(name: str, id: int) -> TensorOrTensors:
     ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels.setdefault(id, Queue()).get()
+    return ctx.target_channels[id].get()
