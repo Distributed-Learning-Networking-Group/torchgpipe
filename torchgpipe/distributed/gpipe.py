@@ -214,4 +214,4 @@ class DistributedGPipeDataLoader:
         return self._middle_stage_iter()
 
     def __len__(self):
-        return self._num_iterations
+        return self._num_iterations * self._chunks
