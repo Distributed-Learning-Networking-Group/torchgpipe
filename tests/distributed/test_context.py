@@ -9,9 +9,9 @@ from torchgpipe.distributed.context import (distributed, get_backward, get_forwa
 @pytest.fixture
 def data():
     return {
-        123: "456",
-        789: "91011",
-        888: "0721"
+        3: "456",
+        17: "91011",
+        29: "0721"
     }
 
 
@@ -56,18 +56,18 @@ def test_restart():
         return
 
 
-@distributed("worker0")
-def _test_single_decorator(data, put, get):
-    _test_kv("worker0", data, put, get)
-
-
-@distributed("worker0")
 @distributed("worker1")
-@distributed("worker2")
-def _test_double_decorator(data, put, get):
-    _test_kv("worker0", data, put, get)
+def _test_single_decorator(data, put, get):
     _test_kv("worker1", data, put, get)
+
+
+@distributed("worker2")
+@distributed("worker3")
+@distributed("worker4")
+def _test_double_decorator(data, put, get):
     _test_kv("worker2", data, put, get)
+    _test_kv("worker3", data, put, get)
+    _test_kv("worker4", data, put, get)
 
 
 @pytest.mark.parametrize("put,get", [[put_forward, get_forward], [put_backward, get_backward]])
