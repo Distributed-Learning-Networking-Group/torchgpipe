@@ -60,7 +60,7 @@ class DistributedGPipe:
     @staticmethod
     def _get(name: str, id: int, backward=False):
         func = context.get_backward if backward else context.get_forward
-        func(name, id)
+        return func(name, id)
 
     @staticmethod
     def _put(name: str, id: int, values: TensorOrTensors, backward=False):
@@ -122,6 +122,9 @@ class DistributedGPipe:
             return None
         return self.workers[self.rank + 1]
 
+    def model(self):
+        return self.module
+
     # type: ignore
     def forward(self, mbatch: int, batch: Optional[TensorOrTensors]) -> TensorOrTensors:
         if batch is not None:
@@ -154,7 +157,7 @@ class DistributedGPipe:
         prev_worker = self._previous_worker()
         if prev_worker is not None:
             leaves = self._grad_output.get()
-            to(torch.device("cpu"), leaves)
+            leaves = to(torch.device("cpu"), leaves)
             DistributedGPipe._put(prev_worker, mbatch, leaves, True)
 
 
