@@ -103,7 +103,7 @@ class DistributedGPipe:
                  rank: int,
                  workers: Dict[int, str],
                  balance: Optional[Iterable[int]] = None,
-                 chunks: int = chunks,
+                 microbatch_chunks: int = chunks,
                  *,
                  device: Optional[torch.device] = None,
                  deferred_batch_norm: bool = False,
@@ -123,7 +123,7 @@ class DistributedGPipe:
         self.rank = rank
         self.world_size = len(workers)
         self.workers = workers
-        self.chunks = chunks
+        self.chunks = microbatch_chunks
         self.device = device
         self.name = workers[rank]
 
