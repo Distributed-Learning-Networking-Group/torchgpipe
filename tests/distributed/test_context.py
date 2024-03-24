@@ -30,7 +30,7 @@ def _test_kv(name: str, data, put: Callable, get: Callable):
 ])
 def test_put_get(data, put: Callable, get: Callable):
     name = "worker0"
-    with worker(name):
+    with worker(name, 32):
         _test_kv(name, data, put, get)
 
 
@@ -49,21 +49,21 @@ def test_illegal(put: Callable):
 def test_restart():
     name = "redundant"
     try:
-        with worker(name):
-            with worker(name):
+        with worker(name, 32):
+            with worker(name, 32):
                 pytest.fail("allow restart worker context")
     except RuntimeError:
         return
 
 
-@distributed("worker1")
+@distributed("worker1", 32)
 def _test_single_decorator(data, put, get):
     _test_kv("worker1", data, put, get)
 
 
-@distributed("worker2")
-@distributed("worker3")
-@distributed("worker4")
+@distributed("worker2", 32)
+@distributed("worker3", 32)
+@distributed("worker4", 32)
 def _test_double_decorator(data, put, get):
     _test_kv("worker2", data, put, get)
     _test_kv("worker3", data, put, get)

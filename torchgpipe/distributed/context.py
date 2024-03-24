@@ -18,10 +18,10 @@ Channel = Queue[TensorOrTensors]
 
 class TrainingContext:
 
-    def __init__(self, context_name: str) -> None:
-        self.forward_channels = [Channel() for _ in range(32)]
-        self.backward_channels = [Channel() for _ in range(32)]
-        self.target_channels: Dict[int, Channel] = [Channel() for _ in range(32)]
+    def __init__(self, context_name: str, microbatch_chunks: int) -> None:
+        self.forward_channels = [Channel() for _ in range(microbatch_chunks)]
+        self.backward_channels = [Channel() for _ in range(microbatch_chunks)]
+        self.target_channels: Dict[int, Channel] = [Channel() for _ in range(microbatch_chunks)]
         self.name = context_name
 
 
@@ -39,11 +39,13 @@ class GlobalContext:
 
 
 @contextmanager
-def worker(context_name: str):
+def worker(context_name: str, microbatch_chunks: int):
     """context manager for training context 
 
     Args:
-        name (str): context name for the worker, must be globally unique 
+        context_name (str): context name for the worker, must be globally unique 
+        microbatch_chunks (int): number of microbatch chunks in the gpipe training setup.
+
 
     Examples:
 
@@ -56,17 +58,18 @@ def worker(context_name: str):
     """
     if context_name in GlobalContext.ctxs:
         raise RuntimeError(f"worker {context_name} already exists")
-    ctx = TrainingContext(context_name)
+    ctx = TrainingContext(context_name, microbatch_chunks)
     GlobalContext.ctxs[context_name] = ctx
     yield
     del GlobalContext.ctxs[context_name]
 
 
-def distributed(context_name: str):
+def distributed(context_name: str, microbatch_chunks):
     """Decorator around torchgpipe.context.worker
 
     Args:
-        name (str): context name for the worker, must be globally unique 
+        context_name (str): context name for the worker, must be globally unique 
+        microbatch_chunks (int): number of microbatch chunks in the gpipe training setup.
 
     Examples:
     context_name = "worker0"
@@ -84,7 +87,7 @@ def distributed(context_name: str):
     """
     def decorator(func: Callable):
         def forwarder(*args, **kwargs):
-            with worker(context_name):
+            with worker(context_name, microbatch_chunks):
                 func(*args, **kwargs)
         return forwarder
     return decorator

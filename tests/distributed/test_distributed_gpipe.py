@@ -33,11 +33,12 @@ def detach(value: TensorOrTensors):
 
 class FakeTrainingGloablContext:
 
-    def __init__(self) -> None:
+    def __init__(self, microbatch_chunks: int) -> None:
         self.ctxs: Dict[str, TrainingContext] = {}
+        self.microbatch_chunks = microbatch_chunks
 
     def fake_get(self, name: str, id: int, backward=False):
-        ctx = self.ctxs.setdefault(name, TrainingContext(name))
+        ctx = self.ctxs.setdefault(name, TrainingContext(name, self.microbatch_chunks))
         if backward:
             channels = ctx.backward_channels
         else:
@@ -45,7 +46,7 @@ class FakeTrainingGloablContext:
         return channels[id].get()
 
     def fake_put(self, name: str, id: int, value: Any, backward=False):
-        ctx = self.ctxs.setdefault(name, TrainingContext(name))
+        ctx = self.ctxs.setdefault(name, TrainingContext(name, self.microbatch_chunks))
         if backward:
             channels = ctx.backward_channels
         else:
@@ -95,7 +96,7 @@ def test_module_partition(module, balance):
 @pytest.mark.timeout(10)
 @pytest.mark.parametrize('balance', [[2, 1, 1]])
 def test_pipeline(module, workers, balance):
-    global_ctx = FakeTrainingGloablContext()
+    global_ctx = FakeTrainingGloablContext(32)
     with patch.object(DistributedGPipe, "_get", global_ctx.fake_get), \
             patch.object(DistributedGPipe, "_put", global_ctx.fake_put):
 
@@ -119,8 +120,7 @@ def test_pipeline(module, workers, balance):
 @pytest.mark.timeout(10)
 @pytest.mark.parametrize("batch_size,chunks", [[32, 3]])
 def test_distributed_data_loader(batch_size: int, chunks: int):
-    import torchgpipe.distributed.context as context
-    global_ctx = FakeTrainingGloablContext()
+    global_ctx = FakeTrainingGloablContext(chunks)
     with patch.object(DistributedGPipeDataLoader, "_put", global_ctx.fake_put), \
             patch.object(DistributedGPipeDataLoader, "_get", global_ctx.fake_get):
         trans = torchvision.transforms.ToTensor()
