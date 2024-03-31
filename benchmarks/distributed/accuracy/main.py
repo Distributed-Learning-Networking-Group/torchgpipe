@@ -38,21 +38,20 @@ EXPERIMENTS: Dict[str, Experiment] = {
     'naive-128': Experiments.naive128,
 }
 
-MODELS : Dict[str, Callable[[int, int], torch.nn.Module]] = {
+MODELS: Dict[str, Callable[[int, int], torch.nn.Module]] = {
     'resnet101': resnet.resnet101,
     'resnet50': resnet.resnet50,
     'vgg16': vgg.vgg16,
 }
 
 
-
 def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
 
-    transform =transforms.Compose([transforms.Resize((224, 224)),
-                                    transforms.ToTensor(),
-                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),
-                                ])
-
+    transform = transforms.Compose([transforms.Resize((224, 224)),
+                                   transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                                                         0.229, 0.224, 0.225]),
+                                    ])
 
     mnist_train = torchvision.datasets.CIFAR10(
         root="./data", train=True, transform=transform, download=True)
@@ -204,7 +203,6 @@ def cli(ctx: click.Context,
     # TODO: distributed balance information
     model = DistributedGPipe(model_local, rank, workers, balance_, chunks, device=devices[0])
 
-
     # Prepare dataloaders.
     train_dataloader, valid_dataloader = dataloaders(
         batch_size,
@@ -300,24 +298,26 @@ def cli(ctx: click.Context,
         data_trained = 0
         loss_sum = torch.zeros(1, device=device)
         model.model().train()
+        losses = None if not last_stage else [None for _ in range(chunks)]
 
         for i, (input, target) in enumerate(train_dataloader):
-            microbatch_id = i % chunks
-            data_trained += microbatch_size 
-            output = model.forward(microbatch_id, input)
-            loss = None
+
+            output = model.forward(input)
+
             if last_stage:
+                mbatch = i % chunks
                 target = target.to(device=device, non_blocking=True)
                 loss = F.cross_entropy(output, target)
                 loss_sum += loss.detach() * batch_size
+                losses[mbatch] = loss
 
-            model.backward(microbatch_id, loss)
+            model.backward(losses)
 
-            if microbatch_id == (chunks - 1):
-                optimizer.step()
-                optimizer.zero_grad()
-                scheduler.step()
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
 
+            data_trained += batch_size
             percent = i / steps * 100
             throughput = data_trained / (time.time()-tick)
             log('train | %d/%d epoch (%d%%) | lr:%.5f | %.3f samples/sec (estimated)'
@@ -347,7 +347,7 @@ def cli(ctx: click.Context,
     with gpipe_context.worker(workers[rank], chunks):
         addr, port = master.split(":")
         os.environ["MASTER_ADDR"] = addr
-        os.environ["MASTER_PORT"] = port 
+        os.environ["MASTER_PORT"] = port
         log(f"init rpc with rank{rank}, world size {world}, master: {addr}:{port}")
         rpc.init_rpc(workers[rank], None, rank, world)
         last_stage = rank == (world - 1)

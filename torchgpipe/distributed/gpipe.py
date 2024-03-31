@@ -127,7 +127,6 @@ class DistributedGPipe:
         self.device = device
         self.name = workers[rank]
 
-        self._inputs: Dict[int, TensorOrTensors] = {}
         self._outputs: Dict[int, TensorOrTensors] = {}
 
         self._grad_output = Queue()  # for retriving gradients from self.module
@@ -157,39 +156,42 @@ class DistributedGPipe:
         return self.module
 
     # type: ignore
-    def forward(self, mbatch: int, batch: Optional[TensorOrTensors]) -> TensorOrTensors:
+    def forward(self, batch: Optional[TensorOrTensors]) -> TensorOrTensors:
         if batch is not None:
             microbatch.check(batch)
+            training_datas = microbatch.scatter(batch, self.chunks)
             assert self.rank == 0
-            inputs = batch
-        else:
-            inputs = DistributedGPipe._get(self.name, mbatch)
-        inputs = to(self.device, inputs)
-        self._inputs[mbatch] = inputs
 
-        outputs = self.module(inputs)
+        for mbatch in range(self.chunks):
+            if self.rank == 0:
+                inputs = training_datas[mbatch]
+            else:
+                inputs = DistributedGPipe._get(self.name, mbatch)
+            inputs = to(self.device, inputs)
+            outputs = self.module(inputs)
+            self._outputs[mbatch] = outputs
 
-        self._outputs[mbatch] = outputs
+            next_worker = self._next_worker()
+            if next_worker is not None:
+                outputs_cpu = to(torch.device("cpu"), outputs)
+                DistributedGPipe._put(next_worker, mbatch, outputs_cpu)
+            return outputs
 
-        next_worker = self._next_worker()
-        if next_worker is not None:
-            outputs_cpu = to(torch.device("cpu"), outputs)
-            DistributedGPipe._put(next_worker, mbatch, outputs_cpu)
-        return outputs
+    def backward(self, losses: Optional[List[Tensor]]):
+        for mbatch in range(self.chunks):
+            if losses is not None:
+                assert self.rank == (self.world_size - 1)
+                losses[mbatch].backward()
+            else:
+                values = DistributedGPipe._get(self.name, mbatch, True)
+                values = to(self.device, values)
+                autograd.backward(self._outputs[mbatch], values)
 
-    def backward(self, mbatch: int, loss: Optional[Tensor]):
-        if loss is not None:
-            assert self.rank == (self.world_size - 1)
-            loss.backward()
-        else:
-            values = DistributedGPipe._get(self.name, mbatch, True)
-            values = to(self.device, values)
-            autograd.backward(self._outputs[mbatch], values)
-        prev_worker = self._previous_worker()
-        if prev_worker is not None:
-            leaves = self._grad_output.get()
-            leaves = to(torch.device("cpu"), leaves)
-            DistributedGPipe._put(prev_worker, mbatch, leaves, True)
+            prev_worker = self._previous_worker()
+            if prev_worker is not None:
+                leaves = self._grad_output.get()
+                leaves = to(torch.device("cpu"), leaves)
+                DistributedGPipe._put(prev_worker, mbatch, leaves, True)
 
 
 class DistributedGPipeDataLoader:
@@ -207,14 +209,14 @@ class DistributedGPipeDataLoader:
     """
 
     @staticmethod
-    def _put(name: str, id: int, value: TensorOrTensors):
+    def _put(name: str, value: TensorOrTensors):
         rpc.remote(
-            name, context.put_target, (name, id, value)
+            name, context.put_target, (name, value)
         )
 
     @staticmethod
-    def _get(name: str, id: int):
-        return context.get_target(name, id)
+    def _get(name: str):
+        return context.get_target(name)
 
     def __init__(self,
                  data_loader: Optional[data.DataLoader],
@@ -239,9 +241,8 @@ class DistributedGPipeDataLoader:
             (None, target)
         """
         for _ in range(self._num_iterations):
-            for mbatch in range(self._chunks):
-                mtarget = DistributedGPipeDataLoader._get(self._last_stage_name, mbatch)
-                yield (None, mtarget)
+            mtarget = DistributedGPipeDataLoader._get(self._last_stage_name)
+            yield (None, mtarget)
 
     def _first_stage_iter(self):
         """iterator for stage 0, note this function will start sending
@@ -251,10 +252,8 @@ class DistributedGPipeDataLoader:
             (data, None)
         """
         for (data, target), _ in zip(self._data_loader, range(self._num_iterations)):
-            batches = microbatch.scatter((data, target), self._chunks)
-            for mbatch, (mdata, mtarget) in enumerate(batches):
-                DistributedGPipeDataLoader._put(self._last_stage_name, mbatch, mtarget)
-                yield (mdata, None)
+            DistributedGPipeDataLoader._put(self._last_stage_name, target)
+            yield (data, None)
 
     def _middle_stage_iter(self):
         """iterator for middle stages
@@ -262,7 +261,7 @@ class DistributedGPipeDataLoader:
         Yields:
             (None, None)
         """
-        for _ in range(self._num_iterations * self._chunks):
+        for _ in range(self._num_iterations):
             yield (None, None)
 
     def __iter__(self):
@@ -273,4 +272,4 @@ class DistributedGPipeDataLoader:
         return self._middle_stage_iter()
 
     def __len__(self):
-        return self._num_iterations * self._chunks
+        return self._num_iterations

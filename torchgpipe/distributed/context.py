@@ -21,7 +21,7 @@ class TrainingContext:
     def __init__(self, context_name: str, microbatch_chunks: int) -> None:
         self.forward_channels = [Channel() for _ in range(microbatch_chunks)]
         self.backward_channels = [Channel() for _ in range(microbatch_chunks)]
-        self.target_channels: Dict[int, Channel] = [Channel() for _ in range(microbatch_chunks)]
+        self.target_channel = Channel()
         self.name = context_name
 
 
@@ -167,7 +167,7 @@ def get_backward(name: str, id: int) -> TensorOrTensors:
     return ctx.backward_channels[id].get()
 
 
-def put_target(name: str, id: int, value: TensorOrTensors) -> TensorOrTensors:
+def put_target(name: str, value: TensorOrTensors) -> TensorOrTensors:
     """see also 'put_forward'
     Args:
         name (str): context name for the worker, must be globally unique 
@@ -175,10 +175,10 @@ def put_target(name: str, id: int, value: TensorOrTensors) -> TensorOrTensors:
         value (TensorOrTensors): tensor or tensors to be put 
     """
     ctx = GlobalContext.get_context(name)
-    return ctx.target_channels[id].put(value)
+    return ctx.target_channel.put(value)
 
 
-def get_target(name: str, id: int) -> TensorOrTensors:
+def get_target(name: str) -> TensorOrTensors:
     """see also 'get_forward'
 
     Args:
@@ -190,4 +190,4 @@ def get_target(name: str, id: int) -> TensorOrTensors:
         TensorOrTensors: value that was put in the given channel. 
     """
     ctx = GlobalContext.get_context(name)
-    return ctx.target_channels[id].get()
+    return ctx.target_channel.get()
