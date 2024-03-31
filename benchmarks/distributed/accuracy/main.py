@@ -115,7 +115,7 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     '--chunks', '-c',
     type=int,
     default=4,
-    help='Number of epochs (default: 4)',
+    help='Number of microbatches (default: 4)',
 )
 @click.option(
     '--master', '-a',
@@ -183,9 +183,11 @@ def cli(ctx: click.Context,
         ctx.fail(str(exc))
 
     model_local, batch_size, _devices = f(model_raw, devices)
+    balance = balance_by_time(
+        world, model_local, torch.empty(128, 3, 224, 224), device=devices[0])
+    print("balance: ", balance)
     # TODO: distributed balance information
-    model = DistributedGPipe(model_local, rank, workers, balance_by_time(
-        world, model_local, torch.empty(128, 3, 224, 224), device=devices[0]), chunks, device=devices[0])
+    model = DistributedGPipe(model_local, rank, workers, balance, chunks, device=devices[0])
 
 
     # Prepare dataloaders.
@@ -274,6 +276,8 @@ def cli(ctx: click.Context,
         return 0.0, 0.0
 
     def run_epoch(epoch: int, last_stage: bool) -> Tuple[float, float]:
+        assert (batch_size % chunks) == 0, "undivisible microbatches are not currentyly supported"
+        microbatch_size = batch_size // chunks
         torch.cuda.synchronize(device)
         tick = time.time()
 
@@ -283,7 +287,7 @@ def cli(ctx: click.Context,
         model.model().train()
 
         for i, (input, target) in enumerate(train_dataloader):
-            data_trained += batch_size
+            data_trained += microbatch_size 
             output = model.forward(i % chunks, input)
             loss = None
             if last_stage:
