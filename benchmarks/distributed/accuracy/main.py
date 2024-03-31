@@ -29,10 +29,9 @@ class Experiments:
 
     @staticmethod
     def naive128(model: nn.Module, devices: List[int]) -> Stuffs:
-        batch_size = 128
         device = devices[0]
         model.to(device)
-        return model, batch_size, [torch.device(device)]
+        return model, [torch.device(device)]
 
 
 EXPERIMENTS: Dict[str, Experiment] = {
@@ -161,6 +160,12 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     type=str,
     help='model to train.',
 )
+@click.option(
+    '--batch-size', '-s',
+    type=int,
+    default=128,
+    help='mini batch size.',
+)
 def cli(ctx: click.Context,
         experiment: str,
         epochs: int,
@@ -172,6 +177,7 @@ def cli(ctx: click.Context,
         chunks: int,
         model: str,
         balance: str,
+        batch_size: int,
         ) -> None:
     """ResNet-101 Accuracy Benchmark"""
     if skip_epochs > epochs:
@@ -188,12 +194,13 @@ def cli(ctx: click.Context,
         #   ValueError: too few devices to hold given partitions (devices: 1, paritions: 2)
         ctx.fail(str(exc))
 
-    model_local, batch_size, _devices = f(model_raw, devices)
+    model_local, _devices = f(model_raw, devices)
     if balance is None:
         balance_ = balance_by_time(world, model_local, torch.empty(128, 3, 224, 224))
     else:
         balance_ = [int(x) for x in balance.split(",")]
     print("balance: ", balance_)
+    print("batchsize: ", batch_size)
     # TODO: distributed balance information
     model = DistributedGPipe(model_local, rank, workers, balance_, chunks, device=devices[0])
 
