@@ -38,7 +38,7 @@ EXPERIMENTS: Dict[str, Experiment] = {
 }
 
 
-def dataloaders(batch_size: int, rank, chunks, iters_per_epoch, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
+def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
 
     trans = torchvision.transforms.Compose([
         torchvision.transforms.Grayscale(num_output_channels=3), torchvision.transforms.ToTensor()])
@@ -47,13 +47,13 @@ def dataloaders(batch_size: int, rank, chunks, iters_per_epoch, last_stage, last
         root="./data", train=True, transform=trans, download=True)
     train_iter = DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
     train_loader = DistributedGPipeDataLoader(
-        train_iter, rank, chunks, iters_per_epoch, last_stage, last_stage_name)
+        train_iter, rank, chunks, len(train_iter), last_stage, last_stage_name)
 
     mnist_test = torchvision.datasets.FashionMNIST(
         root="./data", train=True, transform=trans, download=True)
     test_iter = DataLoader(mnist_test, batch_size=batch_size, shuffle=True)
     test_loader = DistributedGPipeDataLoader(
-        test_iter, rank, chunks, iters_per_epoch, last_stage, last_stage_name)
+        test_iter, rank, chunks, len(test_iter), last_stage, last_stage_name)
 
     return train_loader, test_loader
 
@@ -169,14 +169,12 @@ def cli(ctx: click.Context,
     model = DistributedGPipe(lmodel, rank, workers, balance_by_time(
         world, model, torch.empty(128, 3, 28, 28), device=devices[0]), chunks, device=devices[0])
 
-    ITERS_PER_EPOCH = 50
 
     # Prepare dataloaders.
     train_dataloader, valid_dataloader = dataloaders(
         batch_size,
         rank,
         chunks,
-        ITERS_PER_EPOCH,
         rank == world - 1,
         workers[world-1]
     )
