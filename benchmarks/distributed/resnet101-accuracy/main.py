@@ -12,6 +12,7 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 import torchvision
+from torchvision import transforms
 import torch.distributed.rpc as rpc
 
 from resnet import resnet101
@@ -40,17 +41,20 @@ EXPERIMENTS: Dict[str, Experiment] = {
 
 def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
 
-    trans = torchvision.transforms.Compose([
-        torchvision.transforms.Grayscale(num_output_channels=3), torchvision.transforms.ToTensor()])
+    transform =transforms.Compose([transforms.Resize((224, 224)),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),
+                                ])
 
-    mnist_train = torchvision.datasets.FashionMNIST(
-        root="./data", train=True, transform=trans, download=True)
+
+    mnist_train = torchvision.datasets.CIFAR10(
+        root="./data", train=True, transform=transform, download=True)
     train_iter = DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
     train_loader = DistributedGPipeDataLoader(
         train_iter, rank, chunks, len(train_iter), last_stage, last_stage_name)
 
-    mnist_test = torchvision.datasets.FashionMNIST(
-        root="./data", train=True, transform=trans, download=True)
+    mnist_test = torchvision.datasets.CIFAR10(
+        root="./data", train=True, transform=transform, download=True)
     test_iter = DataLoader(mnist_test, batch_size=batch_size, shuffle=True)
     test_loader = DistributedGPipeDataLoader(
         test_iter, rank, chunks, len(test_iter), last_stage, last_stage_name)
