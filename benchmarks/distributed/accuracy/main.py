@@ -156,6 +156,11 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     type=str,
     help='model to train.',
 )
+@click.option(
+    '--balance', '-b',
+    type=str,
+    help='model to train.',
+)
 def cli(ctx: click.Context,
         experiment: str,
         epochs: int,
@@ -166,6 +171,7 @@ def cli(ctx: click.Context,
         world: int,
         chunks: int,
         model: str,
+        balance: str,
         ) -> None:
     """ResNet-101 Accuracy Benchmark"""
     if skip_epochs > epochs:
@@ -183,11 +189,13 @@ def cli(ctx: click.Context,
         ctx.fail(str(exc))
 
     model_local, batch_size, _devices = f(model_raw, devices)
-    balance = balance_by_time(
-        world, model_local, torch.empty(128, 3, 224, 224), device=devices[0])
-    print("balance: ", balance)
+    if balance is None:
+        balance_ = balance_by_time(world, model_local, torch.empty(128, 3, 224, 224))
+    else:
+        balance_ = [int(x) for x in balance.split(",")]
+    print("balance: ", balance_)
     # TODO: distributed balance information
-    model = DistributedGPipe(model_local, rank, workers, balance, chunks, device=devices[0])
+    model = DistributedGPipe(model_local, rank, workers, balance_, chunks, device=devices[0])
 
 
     # Prepare dataloaders.
