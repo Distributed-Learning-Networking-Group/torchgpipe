@@ -185,7 +185,7 @@ def cli(ctx: click.Context,
     model_local, batch_size, _devices = f(model_raw, devices)
     # TODO: distributed balance information
     model = DistributedGPipe(model_local, rank, workers, balance_by_time(
-        world, model, torch.empty(128, 3, 28, 28), device=devices[0]), chunks, device=devices[0])
+        world, model_local, torch.empty(128, 3, 28, 28), device=devices[0]), chunks, device=devices[0])
 
 
     # Prepare dataloaders.
