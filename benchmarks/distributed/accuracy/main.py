@@ -300,16 +300,16 @@ def cli(ctx: click.Context,
         model.model().train()
         losses = None if not last_stage else [None for _ in range(chunks)]
 
-        for i, (input, target) in enumerate(train_dataloader):
+        for i, (input, targets) in enumerate(train_dataloader):
 
-            output = model.forward(input)
+            outputs = model.forward(input)
 
             if last_stage:
-                mbatch = i % chunks
-                target = target.to(device=device, non_blocking=True)
-                loss = F.cross_entropy(output, target)
-                loss_sum += loss.detach() * batch_size
-                losses[mbatch] = loss
+                targets = targets.to(device=device, non_blocking=True)
+                for mbatch, output, target in zip(range(chunks), outputs, targets.chunk(chunks)):
+                    loss = F.cross_entropy(output, target)
+                    loss_sum += loss.detach() * (microbatch_size)
+                    losses[mbatch] = loss
 
             model.backward(losses)
 
@@ -320,8 +320,8 @@ def cli(ctx: click.Context,
             data_trained += batch_size
             percent = i / steps * 100
             throughput = data_trained / (time.time()-tick)
-            log('train | %d/%d epoch (%d%%) | lr:%.5f | %.3f samples/sec (estimated)'
-                '' % (epoch+1, epochs, percent, scheduler.get_lr()[0], throughput),
+            log('train | %d/%d epoch (%d%%) | lr:%.5f | %.3f samples/sec (estimated), loss: %.3f'
+                '' % (epoch+1, epochs, percent, scheduler.get_lr()[0], throughput, loss_sum.item() / data_trained),
                 clear=True, nl=False)
 
         torch.cuda.synchronize(device)

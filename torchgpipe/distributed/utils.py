@@ -7,7 +7,7 @@ def to(device: torch.device, value: TensorOrTensors):
     if value is None:
         return None
     if not isinstance(value, tuple):
-        new_value = value.detach()
+        new_value = value.detach().to(device)
         if value.requires_grad:
             new_value.requires_grad_()
         return new_value

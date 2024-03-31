@@ -1,7 +1,23 @@
 import torch
+from torch import nn
+
+
+def _initialize_weights(module: torch.nn.Sequential):
+    for m in module.modules():
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, 0, 0.01)
+            nn.init.constant_(m.bias, 0)
+    return module
 
 def vgg16(num_classes: int, inplace: bool) -> torch.nn.Sequential:
-    return torch.nn.Sequential(
+    model = torch.nn.Sequential(
         torch.nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
         torch.nn.ReLU(inplace=inplace),
         torch.nn.Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
@@ -45,3 +61,4 @@ def vgg16(num_classes: int, inplace: bool) -> torch.nn.Sequential:
         torch.nn.Dropout(p=0.5),
         torch.nn.Linear(in_features=4096, out_features=num_classes, bias=True),
     )
+    return _initialize_weights(model) 
