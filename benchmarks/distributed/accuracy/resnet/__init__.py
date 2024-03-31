@@ -28,3 +28,6 @@ def resnet101(num_classes: int, inplace: bool):
     if inplace is False:
         ReLU_inplace_to_False(model)
     return model
+
+def resnet50(num_classes: int, inplace: bool):
+    pass

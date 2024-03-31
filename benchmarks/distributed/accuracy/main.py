@@ -14,11 +14,12 @@ from torch.utils.data import DataLoader
 import torchvision
 from torchvision import transforms
 import torch.distributed.rpc as rpc
-
-from resnet import resnet101
 import torchgpipe.distributed.context as gpipe_context
 from torchgpipe.balance import balance_by_time
 from torchgpipe.distributed.gpipe import DistributedGPipe, DistributedGPipeDataLoader
+
+import resnet
+import vgg
 
 Stuffs = Tuple[nn.Module, int, List[torch.device]]  # (model, batch_size, devices)
 Experiment = Callable[[nn.Module, List[int]], Stuffs]
@@ -37,6 +38,13 @@ class Experiments:
 EXPERIMENTS: Dict[str, Experiment] = {
     'naive-128': Experiments.naive128,
 }
+
+MODELS : Dict[str, Callable[[int, int], torch.nn.Module]] = {
+    'resnet101': resnet.resnet101,
+    'resnet50': resnet.resnet50,
+    'vgg16': vgg.vgg16,
+}
+
 
 
 def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
@@ -113,7 +121,7 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     '--master', '-a',
     type=str,
     default='localhost:11451',
-    help='Number of epochs (default: 4)',
+    help='master address',
 )
 @click.option(
     '--epochs', '-e',
@@ -143,6 +151,11 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     type=int,
     help='Total worker number in distributed training setup.',
 )
+@click.option(
+    '--model', '-m',
+    type=str,
+    help='model to train.',
+)
 def cli(ctx: click.Context,
         experiment: str,
         epochs: int,
@@ -152,13 +165,14 @@ def cli(ctx: click.Context,
         rank: int,
         world: int,
         chunks: int,
+        model: str,
         ) -> None:
     """ResNet-101 Accuracy Benchmark"""
     if skip_epochs > epochs:
         ctx.fail('--skip-epochs=%d must be less than --epochs=%d' % (skip_epochs, epochs))
 
     relu_inplace = False
-    model = resnet101(num_classes=1000, inplace=relu_inplace)
+    model_raw = MODELS[model](num_classes=1000, inplace=relu_inplace)
 
     f = EXPERIMENTS[experiment]
     try:
@@ -168,9 +182,9 @@ def cli(ctx: click.Context,
         #   ValueError: too few devices to hold given partitions (devices: 1, paritions: 2)
         ctx.fail(str(exc))
 
-    lmodel, batch_size, _devices = f(model, devices)
+    model_local, batch_size, _devices = f(model_raw, devices)
     # TODO: distributed balance information
-    model = DistributedGPipe(lmodel, rank, workers, balance_by_time(
+    model = DistributedGPipe(model_local, rank, workers, balance_by_time(
         world, model, torch.empty(128, 3, 28, 28), device=devices[0]), chunks, device=devices[0])
 
 
