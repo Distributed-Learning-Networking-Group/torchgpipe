@@ -287,20 +287,21 @@ def cli(ctx: click.Context,
         model.model().train()
 
         for i, (input, target) in enumerate(train_dataloader):
+            microbatch_id = i % chunks
             data_trained += microbatch_size 
-            output = model.forward(i % chunks, input)
+            output = model.forward(microbatch_id, input)
             loss = None
             if last_stage:
                 target = target.to(device=device, non_blocking=True)
                 loss = F.cross_entropy(output, target)
-
-            optimizer.zero_grad()
-            model.backward(i % chunks, loss)
-
-            optimizer.step()
-            scheduler.step()
-            if last_stage:
                 loss_sum += loss.detach() * batch_size
+
+            model.backward(microbatch_id, loss)
+
+            if microbatch_id == (chunks - 1):
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
 
             percent = i / steps * 100
             throughput = data_trained / (time.time()-tick)
