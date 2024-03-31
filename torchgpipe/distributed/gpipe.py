@@ -109,11 +109,11 @@ class DistributedGPipe:
                  deferred_batch_norm: bool = False,
                  ) -> None:
 
-        chunks = int(chunks)
+        microbatch_chunks = int(microbatch_chunks)
 
         if balance is None:
             raise ValueError(recommend_auto_balance('balance is required'))
-        if chunks <= 0:
+        if microbatch_chunks <= 0:
             raise ValueError('number of chunks must be positive integer')
 
         verify_module(module)
@@ -135,7 +135,7 @@ class DistributedGPipe:
         self._remove_handle = module.register_full_backward_hook(self._retrieve_grad)
 
         if deferred_batch_norm:
-            module = DeferredBatchNorm.convert_deferred_batch_norm(module, chunks)
+            module = DeferredBatchNorm.convert_deferred_batch_norm(module, microbatch_chunks)
 
     def _retrieve_grad(self, module, grad_input, grad_output):
         """This function is used as backward hook for retriving the
