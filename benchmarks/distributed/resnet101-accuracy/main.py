@@ -106,6 +106,12 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     help='Number of epochs (default: 4)',
 )
 @click.option(
+    '--master', '-a',
+    type=str,
+    default='localhost:11451',
+    help='Number of epochs (default: 4)',
+)
+@click.option(
     '--epochs', '-e',
     type=int,
     default=10,
@@ -136,6 +142,7 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
 def cli(ctx: click.Context,
         experiment: str,
         epochs: int,
+        master: str,
         skip_epochs: int,
         devices: List[int],
         rank: int,
@@ -301,10 +308,11 @@ def cli(ctx: click.Context,
     throughputs = []
     elapsed_times = []
 
-    with gpipe_context.worker(workers[rank]):
-        os.environ["MASTER_ADDR"] = "127.0.0.1"
-        os.environ["MASTER_PORT"] = "7631"
-        log(f"init rpc with rank{rank}, world size {world}")
+    with gpipe_context.worker(workers[rank], chunks):
+        addr, port = master.split(":")
+        os.environ["MASTER_ADDR"] = addr
+        os.environ["MASTER_PORT"] = port 
+        log(f"init rpc with rank{rank}, world size {world}, master: {addr}:{port}")
         rpc.init_rpc(workers[rank], None, rank, world)
         last_stage = rank == (world - 1)
         hr()
