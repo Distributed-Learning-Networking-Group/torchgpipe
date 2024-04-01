@@ -265,6 +265,10 @@ class DistributedGPipeDataLoader:
             yield (None, None)
 
     def __iter__(self):
+
+        if self._last_stage and self._rank == 0:
+            return self._data_loader.__iter__()
+
         if self._last_stage:
             return self._last_stage_iter()
         if self._rank == 0:
