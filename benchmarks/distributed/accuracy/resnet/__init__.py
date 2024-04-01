@@ -1,3 +1,4 @@
+from typing import Iterable
 import torch
 import torchvision
 import torch.nn as nn
@@ -10,24 +11,41 @@ def ReLU_inplace_to_False(module: nn.Module):
         ReLU_inplace_to_False(layer)
 
 
-def resnet101(num_classes: int, inplace: bool):
-    model = torchvision.models.resnet101(num_classes=num_classes)
+def _resnet_to_sequential(torch_model: torchvision.models.ResNet) -> nn.Sequential:
     model = torch.nn.Sequential(
-        model.conv1,
-        model.bn1,
-        model.relu,
-        model.maxpool,
-        model.layer1,
-        model.layer2,
-        model.layer3,
-        model.layer4,
-        model.avgpool,
-        torch.nn.Flatten(),
-        model.fc,
+        torch_model.conv1,
+        torch_model.bn1,
+        torch_model.relu,
+        torch_model.maxpool,
     )
-    if inplace is False:
-        ReLU_inplace_to_False(model)
+    append_sequential(model, torch_model.layer1)
+    append_sequential(model, torch_model.layer2)
+    append_sequential(model, torch_model.layer3)
+    append_sequential(model, torch_model.layer4)
+    append_sequential(
+        model, [
+            torch_model.avgpool,
+            torch.nn.Flatten(),
+            torch_model.fc,
+        ]
+    )
     return model
 
+
+def append_sequential(module: nn.Sequential, children: Iterable[nn.Module]):
+    for child in children:
+        module.append(child)
+
+
+def resnet101(num_classes: int, inplace: bool):
+    torch_model = torchvision.models.resnet101(num_classes=num_classes)
+    if inplace is False:
+        ReLU_inplace_to_False(torch_model)
+    return _resnet_to_sequential(torch_model)
+
+
 def resnet50(num_classes: int, inplace: bool):
-    pass
+    torch_model = torchvision.models.resnet50(num_classes=num_classes)
+    if inplace is False:
+        ReLU_inplace_to_False(torch_model)
+    return _resnet_to_sequential(torch_model)
