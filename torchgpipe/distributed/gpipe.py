@@ -127,7 +127,7 @@ class DistributedGPipe:
         self.device = device
         self.name = workers[rank]
 
-        self._outputs: List[Optional[TensorOrTensors]] = [None for _ in range(microbatch_chunks)] 
+        self._outputs: List[Optional[TensorOrTensors]] = [None for _ in range(microbatch_chunks)]
 
         self._grad_output = Queue()  # for retriving gradients from self.module
 
@@ -175,7 +175,7 @@ class DistributedGPipe:
             if next_worker is not None:
                 outputs_cpu = to(torch.device("cpu"), outputs)
                 DistributedGPipe._put(next_worker, mbatch, outputs_cpu)
-        return self._outputs 
+        return self._outputs
 
     def backward(self, losses: Optional[List[Tensor]]):
         for mbatch in range(self.chunks):
@@ -265,10 +265,8 @@ class DistributedGPipeDataLoader:
             yield (None, None)
 
     def __iter__(self):
-
         if self._last_stage and self._rank == 0:
             return self._data_loader.__iter__()
-
         if self._last_stage:
             return self._last_stage_iter()
         if self._rank == 0:
