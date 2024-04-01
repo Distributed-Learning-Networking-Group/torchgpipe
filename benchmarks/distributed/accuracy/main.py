@@ -74,9 +74,9 @@ def dataloaders(
                 0.229, 0.224, 0.225]),
         ])
         train_dataset = torchvision.datasets.CIFAR10(
-            root="/data", train=True, transform=transform, download=True)
+            root=".data", train=True, transform=transform, download=True)
         test_dataset = torchvision.datasets.CIFAR10(
-            root="/data", train=False, transform=transform, download=True)
+            root=".data", train=False, transform=transform, download=True)
 
     train_iter = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     train_loader = DistributedGPipeDataLoader(
