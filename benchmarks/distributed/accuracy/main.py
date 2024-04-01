@@ -183,7 +183,7 @@ def cli(ctx: click.Context,
         ctx.fail('--skip-epochs=%d must be less than --epochs=%d' % (skip_epochs, epochs))
 
     relu_inplace = False
-    model_raw = MODELS[model](num_classes=1000, inplace=relu_inplace)
+    model_raw = MODELS[model](num_classes=10, inplace=relu_inplace)
 
     f = EXPERIMENTS[experiment]
     try:
@@ -213,27 +213,28 @@ def cli(ctx: click.Context,
     )
 
     # Optimizer with LR scheduler
-    steps = len(train_dataloader)
-    lr_multiplier = max(1.0, batch_size / 256)
-    optimizer = SGD(model.model().parameters(), lr=0.1,
-                    momentum=0.9, weight_decay=1e-4, nesterov=True)
+    # steps = len(train_dataloader)
+    # lr_multiplier = max(1.0, batch_size / 256)
+    optimizer = SGD(model.model().parameters(), lr=0.001,
+                    momentum=0.9 )
+                    #weight_decay=1e-4, nesterov=True)
 
-    def gradual_warmup_linear_scaling(step: int) -> float:
-        epoch = step / steps
+    # def gradual_warmup_linear_scaling(step: int) -> float:
+    #     epoch = step / steps
 
-        # Gradual warmup
-        warmup_ratio = min(4.0, epoch) / 4.0
-        multiplier = warmup_ratio * (lr_multiplier - 1.0) + 1.0
+    #     # Gradual warmup
+    #     warmup_ratio = min(4.0, epoch) / 4.0
+    #     multiplier = warmup_ratio * (lr_multiplier - 1.0) + 1.0
 
-        if epoch < 30:
-            return 1.0 * multiplier
-        elif epoch < 60:
-            return 0.1 * multiplier
-        elif epoch < 80:
-            return 0.01 * multiplier
-        return 0.001 * multiplier
+    #     if epoch < 30:
+    #         return 1.0 * multiplier
+    #     elif epoch < 60:
+    #         return 0.1 * multiplier
+    #     elif epoch < 80:
+    #         return 0.01 * multiplier
+    #     return 0.001 * multiplier
 
-    scheduler = LambdaLR(optimizer, lr_lambda=gradual_warmup_linear_scaling)
+    # scheduler = LambdaLR(optimizer, lr_lambda=gradual_warmup_linear_scaling)
 
     # HEADER ======================================================================================
 
@@ -264,19 +265,19 @@ def cli(ctx: click.Context,
         accuracy_sum = torch.zeros(1, device=device)
         model.model().eval()
         with torch.no_grad():
-            for i, (input, target) in enumerate(dataloader):
+            for i, (input, targets) in enumerate(dataloader):
+                data_tested += batch_size 
                 current_batch = batch_size // chunks
-                data_tested += current_batch
-                output = model.forward(i % chunks, input)
+                outputs = model.forward(input)
 
                 if last_stage:
-                    target = target.to(device=device)
-                    loss = F.cross_entropy(output, target)
-                    loss_sum += loss * current_batch
-
-                    _, predicted = torch.max(output, 1)
-                    correct = (predicted == target).sum()
-                    accuracy_sum += correct
+                    targets= targets.to(device=device)
+                    for output, target in zip(outputs, targets.chunk(chunks)):
+                        loss = F.cross_entropy(output, target)
+                        loss_sum += loss.detach() * (current_batch)
+                        _, predicted = torch.max(output, 1)
+                        correct = (predicted == target).sum()
+                        accuracy_sum += correct
 
                     percent = i / steps * 100
                     throughput = data_tested / (time.time() - tick)
@@ -302,6 +303,8 @@ def cli(ctx: click.Context,
 
         for i, (input, targets) in enumerate(train_dataloader):
 
+            optimizer.zero_grad()
+
             outputs = model.forward(input)
 
             if last_stage:
@@ -309,19 +312,18 @@ def cli(ctx: click.Context,
                 for mbatch, output, target in zip(range(chunks), outputs, targets.chunk(chunks)):
                     loss = F.cross_entropy(output, target)
                     loss_sum += loss.detach() * (microbatch_size)
-                    losses[mbatch] = loss
+                    losses[mbatch] = loss / chunks 
 
             model.backward(losses)
 
             optimizer.step()
-            optimizer.zero_grad()
-            scheduler.step()
+            # scheduler.step()
 
             data_trained += batch_size
             percent = i / steps * 100
             throughput = data_trained / (time.time()-tick)
-            log('train | %d/%d epoch (%d%%) | lr:%.5f | %.3f samples/sec (estimated), loss: %.3f'
-                '' % (epoch+1, epochs, percent, scheduler.get_lr()[0], throughput, loss_sum.item() / data_trained),
+            log('train | %d/%d epoch (%d%%) | %.3f samples/sec (estimated), loss: %.3f'
+                '' % (epoch+1, epochs, percent,  throughput, loss_sum.item() / data_trained),
                 clear=True, nl=False)
 
         torch.cuda.synchronize(device)
@@ -333,9 +335,9 @@ def cli(ctx: click.Context,
 
         elapsed_time = tock - tick
         throughput = data_trained / elapsed_time
-        log('%d/%d epoch | lr:%.5f | train loss:%.3f %.3f samples/sec | '
+        log('%d/%d epoch | train loss:%.3f %.3f samples/sec | '
             'valid loss:%.3f accuracy:%.3f'
-            '' % (epoch+1, epochs, scheduler.get_lr()[0], train_loss, throughput,
+            '' % (epoch+1, epochs, train_loss, throughput,
                   valid_loss, valid_accuracy),
             clear=True)
 
