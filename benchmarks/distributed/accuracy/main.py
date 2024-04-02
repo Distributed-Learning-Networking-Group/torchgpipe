@@ -49,7 +49,8 @@ MODELS: Dict[str, Callable[[int, int], torch.nn.Module]] = {
     'bert': bert.bert
 }
 
-class pretraining_dataset(torch.Dataset):
+
+class pretraining_dataset(torch.utils.data.Dataset):
 
     def __init__(self, input_file, max_pred_length):
         self.input_file = input_file
@@ -77,7 +78,7 @@ class pretraining_dataset(torch.Dataset):
             index = padded_mask_indices[0].item()
         masked_lm_labels[masked_lm_positions[:index]] = masked_lm_ids[:index]
         # print("nsp_label",next_sentence_labels)
-        return (input_ids, segment_ids, input_mask), masked_lm_labels 
+        return (input_ids, segment_ids, input_mask), masked_lm_labels
 
 
 def dataloaders(
