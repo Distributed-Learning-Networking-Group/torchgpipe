@@ -93,11 +93,8 @@ def dataloaders(
 ) -> Tuple[DataLoader, DataLoader]:
 
     if is_bert:
-        train_data = pretraining_dataset(dataset_path[0], 80), None
-        train_loader = DataLoader(train_data, shuffle=True,
-                                  batch_size=batch_size, num_workers=4,
-                                  pin_memory=True, drop_last=True)
-        return train_loader, None
+        train_dataset = pretraining_dataset(dataset_path[0], 80)
+        test_dataset = pretraining_dataset(dataset_path[0], 80)
 
     if dataset_path is not None:
         transform = transforms.Compose([
