@@ -131,7 +131,7 @@ class DistributedGPipe:
 
         self._grad_output = Queue()  # for retriving gradients from self.module
 
-        self._remove_handle = module.register_full_backward_hook(self._retrieve_grad)
+        self._remove_handle = module[0].register_full_backward_hook(self._retrieve_grad)
 
         if deferred_batch_norm:
             module = DeferredBatchNorm.convert_deferred_batch_norm(module, microbatch_chunks)
@@ -185,7 +185,9 @@ class DistributedGPipe:
             else:
                 values = DistributedGPipe._get(self.name, mbatch, True)
                 values = to(self.device, values)
-                autograd.backward(self._outputs[mbatch], values)
+                for tensor, grad in zip(self._outputs[mbatch], values):
+                    if grad is not None:
+                        autograd.backward(tensor, grad)
 
             prev_worker = self._previous_worker()
             if prev_worker is not None:

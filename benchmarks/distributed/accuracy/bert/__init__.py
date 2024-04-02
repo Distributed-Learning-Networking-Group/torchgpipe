@@ -1,3 +1,4 @@
+import queue
 from typing import Tuple
 import torch
 from bert.modeling import *
@@ -15,6 +16,8 @@ class BERT_HEAD(nn.Module):
 class TransformerBlock(nn.Module):
 
     def __init__(self) -> None:
+        self._hook = None
+
         super(TransformerBlock, self).__init__()
         self.layer7 = BertSelfAttention(1024, 16, 0.1)
         self.layer8 = torch.nn.Linear(in_features=1024, out_features=1024, bias=True)
@@ -25,8 +28,13 @@ class TransformerBlock(nn.Module):
         self.layer14 = torch.nn.Dropout(p=0.1)
         self.layer16 = BertLayerNorm(1024)
 
+    def _input_hook_6(self, grad):
+        self._hook(None, (grad, None), None)
+
     def forward(self, inputs: Tuple[torch.Tensor]):
         out6, out2 = inputs[0], inputs[1]
+        if self._hook is not None and out6.requires_grad:
+            out6.register_hook(self._input_hook_6)
         out7 = self.layer7(out6, out2)
         out8 = self.layer8(out7)
         out9 = self.layer9(out8)
@@ -38,6 +46,9 @@ class TransformerBlock(nn.Module):
         out14 = out14 + out11
         out16 = self.layer16(out14)
         return out16, out2
+
+    def register_full_backward_hook(self, hook):
+        self._hook = hook
 
 
 class BERT_TAIL(nn.Module):
