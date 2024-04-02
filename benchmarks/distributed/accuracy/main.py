@@ -25,6 +25,26 @@ import resnet
 import vgg
 import bert
 
+
+class CrossEntropyWrapper(nn.Module):
+    def __init__(self, vocab_size):
+        super(CrossEntropyWrapper, self).__init__()
+        self.cross_entropy = torch.nn.CrossEntropyLoss(ignore_index=-1)
+        self.vocab_size = vocab_size
+        # print("vocab")
+        # print(vocab_size)
+
+    def forward(self, prediction_scores, masked_lm_labels=None):
+        if masked_lm_labels is not None:
+
+            masked_lm_loss = self.cross_entropy(
+                prediction_scores.view(-1, self.vocab_size), masked_lm_labels.view(-1))
+            return masked_lm_loss
+        else:
+
+            return prediction_scores
+
+
 Stuffs = Tuple[nn.Module, int, List[torch.device]]  # (model, batch_size, devices)
 Experiment = Callable[[nn.Module, List[int]], Stuffs]
 
@@ -332,6 +352,9 @@ def cli(ctx: click.Context,
         return 0.0, 0.0
 
     def run_epoch(epoch: int, last_stage: bool) -> Tuple[float, float]:
+
+        loss_func = CrossEntropyWrapper(30528)
+
         assert (batch_size % chunks) == 0, "undivisible microbatches are not currentyly supported"
         microbatch_size = batch_size // chunks
         torch.cuda.synchronize(device)
@@ -346,11 +369,14 @@ def cli(ctx: click.Context,
         pbar = tqdm.tqdm(train_dataloader, unit="sample", unit_scale=float(batch_size))
         for input, targets in pbar:
             optimizer.zero_grad()
-            outputs = model.forward(input)
+            input[2] = input[2].unsqueeze(1).unsqueeze(2)
+            input[2] = input[2].to(dtype=torch.float32)  # fp16 compatibility
+            input[2] = (1.0 - input[2]) * -10000.0
+            outputs = model.forward(tuple(input))
             if last_stage:
                 targets = targets.to(device=device, non_blocking=True)
                 for mbatch, output, target in zip(range(chunks), outputs, targets.chunk(chunks)):
-                    loss = F.cross_entropy(output, target)
+                    loss = loss_func(output, target)
                     loss_sum += loss.detach() * (microbatch_size)
                     losses[mbatch] = loss / chunks
             model.backward(losses)

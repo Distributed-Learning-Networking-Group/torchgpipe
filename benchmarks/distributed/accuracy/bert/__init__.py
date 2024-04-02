@@ -25,7 +25,8 @@ class TransformerBlock(nn.Module):
         self.layer14 = torch.nn.Dropout(p=0.1)
         self.layer16 = BertLayerNorm(1024)
 
-    def forward(self, out6, out2):
+    def forward(self, inputs: Tuple[torch.Tensor]):
+        out6, out2 = inputs[0], inputs[1]
         out7 = self.layer7(out6, out2)
         out8 = self.layer8(out7)
         out9 = self.layer9(out8)
@@ -47,7 +48,8 @@ class BERT_TAIL(nn.Module):
         self.layer249 = torch.nn.Linear(in_features=1024, out_features=30528, bias=False)
         self.layer250 = BertAdd(30528)
 
-    def forward(self, out246, _):
+    def forward(self, inputs: Tuple[torch.Tensor]):
+        out246 = inputs[0]
         out247 = self.layer247(out246)
         out248 = self.layer248(out247)
         out249 = self.layer249(out248)
