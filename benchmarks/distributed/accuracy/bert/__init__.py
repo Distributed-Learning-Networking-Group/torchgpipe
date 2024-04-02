@@ -52,7 +52,7 @@ class BERT_TAIL(nn.Module):
         return self.layer250(out249)
 
 
-def bert():
+def bert(_, __):
     return nn.Sequential(
         BERT_HEAD(),
         TransformerBlock(),

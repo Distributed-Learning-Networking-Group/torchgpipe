@@ -17,9 +17,11 @@ import torch.distributed.rpc as rpc
 import torchgpipe.distributed.context as gpipe_context
 from torchgpipe.balance import balance_by_time
 from torchgpipe.distributed.gpipe import DistributedGPipe, DistributedGPipeDataLoader
+import tqdm
 
 import resnet
 import vgg
+import bert
 
 Stuffs = Tuple[nn.Module, int, List[torch.device]]  # (model, batch_size, devices)
 Experiment = Callable[[nn.Module, List[int]], Stuffs]
@@ -42,26 +44,47 @@ MODELS: Dict[str, Callable[[int, int], torch.nn.Module]] = {
     'resnet101': resnet.resnet101,
     'resnet50': resnet.resnet50,
     'vgg16': vgg.vgg16,
+    'bert': bert.bert
 }
 
 
-def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> Tuple[DataLoader, DataLoader]:
+def dataloaders(
+        batch_size: int,
+        rank,
+        chunks,
+        last_stage,
+        last_stage_name,
+        # [train dataset path, test dataset path]
+        dataset_path: Tuple[str, str],
+) -> Tuple[DataLoader, DataLoader]:
 
-    transform = transforms.Compose([transforms.Resize((224, 224)),
-                                   transforms.ToTensor(),
-                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
-                                                         0.229, 0.224, 0.225]),
-                                    ])
+    if dataset_path is not None:
+        transform = transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                0.229, 0.224, 0.225]),
+        ])
+        train_dataset = torchvision.datasets.ImageFolder(dataset_path[0], transform)
+        test_dataset = torchvision.datasets.ImageFolder(dataset_path[1], transform)
+    else:
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                0.229, 0.224, 0.225]),
+        ])
+        train_dataset = torchvision.datasets.CIFAR10(
+            root=".data", train=True, transform=transform, download=True)
+        test_dataset = torchvision.datasets.CIFAR10(
+            root=".data", train=False, transform=transform, download=True)
 
-    mnist_train = torchvision.datasets.CIFAR10(
-        root="./data", train=True, transform=transform, download=True)
-    train_iter = DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
+    train_iter = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     train_loader = DistributedGPipeDataLoader(
         train_iter, rank, chunks, len(train_iter), last_stage, last_stage_name)
 
-    mnist_test = torchvision.datasets.CIFAR10(
-        root="./data", train=True, transform=transform, download=True)
-    test_iter = DataLoader(mnist_test, batch_size=batch_size, shuffle=True)
+    test_iter = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DistributedGPipeDataLoader(
         test_iter, rank, chunks, len(test_iter), last_stage, last_stage_name)
 
@@ -69,32 +92,6 @@ def dataloaders(batch_size: int, rank, chunks, last_stage, last_stage_name) -> T
 
 
 BASE_TIME: float = 0
-
-
-def hr() -> None:
-    """Prints a horizontal line."""
-    width, _ = click.get_terminal_size()
-    click.echo('-' * width)
-
-
-def log(msg: str, clear: bool = False, nl: bool = True) -> None:
-    """Prints a message with elapsed time."""
-    if clear:
-        # Clear the output line to overwrite.
-        width, _ = click.get_terminal_size()
-        click.echo('\b\r', nl=False)
-        click.echo(' ' * width, nl=False)
-        click.echo('\b\r', nl=False)
-
-    t = time.time() - BASE_TIME
-    h = t // 3600
-    t %= 3600
-    m = t // 60
-    t %= 60
-    s = t
-
-    click.echo('%02d:%02d:%02d | ' % (h, m, s), nl=False)
-    click.echo(msg, nl=nl)
 
 
 def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
@@ -165,6 +162,12 @@ def parse_devices(ctx: Any, param: Any, value: Optional[str]) -> List[int]:
     default=128,
     help='mini batch size.',
 )
+@click.option(
+    '--dataset-path', '-p',
+    type=str,
+    default=None,
+    help='path to train/test datasets, sperated by \',\'.',
+)
 def cli(ctx: click.Context,
         experiment: str,
         epochs: int,
@@ -177,6 +180,7 @@ def cli(ctx: click.Context,
         model: str,
         balance: str,
         batch_size: int,
+        dataset_path: str,
         ) -> None:
     """ResNet-101 Accuracy Benchmark"""
     if skip_epochs > epochs:
@@ -209,15 +213,16 @@ def cli(ctx: click.Context,
         rank,
         chunks,
         rank == world - 1,
-        workers[world-1]
+        workers[world-1],
+        None if dataset_path is None else dataset_path.split(","),
     )
 
     # Optimizer with LR scheduler
     # steps = len(train_dataloader)
     # lr_multiplier = max(1.0, batch_size / 256)
     optimizer = SGD(model.model().parameters(), lr=0.001,
-                    momentum=0.9 )
-                    #weight_decay=1e-4, nesterov=True)
+                    momentum=0.9)
+    # weight_decay=1e-4, nesterov=True)
 
     # def gradual_warmup_linear_scaling(step: int) -> float:
     #     epoch = step / steps
@@ -259,19 +264,20 @@ def cli(ctx: click.Context,
     def evaluate(dataloader: DataLoader, last_stage: bool) -> Tuple[float, float]:
         assert (batch_size % chunks) == 0, "undivisible microbatches are not currentyly supported"
         tick = time.time()
-        steps = len(dataloader)
         data_tested = 0
         loss_sum = torch.zeros(1, device=device)
         accuracy_sum = torch.zeros(1, device=device)
         model.model().eval()
         with torch.no_grad():
-            for i, (input, targets) in enumerate(dataloader):
-                data_tested += batch_size 
+            pbar = tqdm.tqdm(dataloader, unit="sample",
+                             unit_scale=float(batch_size), desc='valid |')
+            for input, targets in pbar:
+                data_tested += batch_size
                 current_batch = batch_size // chunks
                 outputs = model.forward(input)
 
                 if last_stage:
-                    targets= targets.to(device=device)
+                    targets = targets.to(device=device)
                     for output, target in zip(outputs, targets.chunk(chunks)):
                         loss = F.cross_entropy(output, target)
                         loss_sum += loss.detach() * (current_batch)
@@ -279,10 +285,6 @@ def cli(ctx: click.Context,
                         correct = (predicted == target).sum()
                         accuracy_sum += correct
 
-                    percent = i / steps * 100
-                    throughput = data_tested / (time.time() - tick)
-                    log('valid | %d%% | %.3f samples/sec (estimated)'
-                        '' % (percent, throughput), clear=True, nl=False)
         if last_stage:
             loss = loss_sum / data_tested
             accuracy = accuracy_sum / data_tested
@@ -301,30 +303,24 @@ def cli(ctx: click.Context,
         model.model().train()
         losses = None if not last_stage else [None for _ in range(chunks)]
 
-        for i, (input, targets) in enumerate(train_dataloader):
-
+        pbar = tqdm.tqdm(train_dataloader, unit="sample", unit_scale=float(batch_size))
+        for input, targets in pbar:
             optimizer.zero_grad()
-
             outputs = model.forward(input)
-
             if last_stage:
                 targets = targets.to(device=device, non_blocking=True)
                 for mbatch, output, target in zip(range(chunks), outputs, targets.chunk(chunks)):
                     loss = F.cross_entropy(output, target)
                     loss_sum += loss.detach() * (microbatch_size)
-                    losses[mbatch] = loss / chunks 
-
+                    losses[mbatch] = loss / chunks
             model.backward(losses)
-
             optimizer.step()
             # scheduler.step()
 
             data_trained += batch_size
-            percent = i / steps * 100
             throughput = data_trained / (time.time()-tick)
-            log('train | %d/%d epoch (%d%%) | %.3f samples/sec (estimated), loss: %.3f'
-                '' % (epoch+1, epochs, percent,  throughput, loss_sum.item() / data_trained),
-                clear=True, nl=False)
+            pbar.set_description('train | %d/%d epoch | loss: %.3f'
+                                 '' % (epoch+1, epochs, loss_sum.item() / data_trained))
 
         torch.cuda.synchronize(device)
         tock = time.time()
@@ -335,11 +331,10 @@ def cli(ctx: click.Context,
 
         elapsed_time = tock - tick
         throughput = data_trained / elapsed_time
-        log('%d/%d epoch | train loss:%.3f %.3f samples/sec | '
-            'valid loss:%.3f accuracy:%.3f'
-            '' % (epoch+1, epochs, train_loss, throughput,
-                  valid_loss, valid_accuracy),
-            clear=True)
+        print('%d/%d epoch | train loss:%.3f %.3f samples/sec | '
+              'valid loss:%.3f accuracy:%.3f'
+              '' % (epoch+1, epochs, train_loss, throughput,
+                    valid_loss, valid_accuracy))
 
         return throughput, elapsed_time
 
@@ -350,10 +345,9 @@ def cli(ctx: click.Context,
         addr, port = master.split(":")
         os.environ["MASTER_ADDR"] = addr
         os.environ["MASTER_PORT"] = port
-        log(f"init rpc with rank{rank}, world size {world}, master: {addr}:{port}")
+        print(f"init rpc with rank{rank}, world size {world}, master: {addr}:{port}")
         rpc.init_rpc(workers[rank], None, rank, world)
         last_stage = rank == (world - 1)
-        hr()
 
         for epoch in range(epochs):
             throughput, elapsed_time = run_epoch(epoch, last_stage)
@@ -365,7 +359,6 @@ def cli(ctx: click.Context,
             elapsed_times.append(elapsed_time)
 
         _, valid_accuracy = evaluate(valid_dataloader, last_stage)
-        hr()
 
         rpc.shutdown()
 
