@@ -80,5 +80,5 @@ def bert(num_classes: int, inplace: bool):
         TransformerBlock(),
         TransformerBlock(),
         TransformerBlock(),
-        BERT_TAIL,
+        BERT_TAIL(),
     )
