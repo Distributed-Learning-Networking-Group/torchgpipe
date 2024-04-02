@@ -40,6 +40,7 @@ class TransformerBlock(nn.Module):
 
 class BERT_TAIL(nn.Module):
     def __init__(self) -> None:
+        super(BERT_TAIL, self).__init__()
         self.layer247 = LinearActivation(in_features=1024, out_features=1024, bias=True)
         self.layer248 = BertLayerNorm(1024)
         self.layer249 = torch.nn.Linear(in_features=1024, out_features=30528, bias=False)
