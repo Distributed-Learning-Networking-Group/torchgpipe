@@ -95,8 +95,7 @@ def dataloaders(
     if is_bert:
         train_dataset = pretraining_dataset(dataset_path[0], 80)
         test_dataset = pretraining_dataset(dataset_path[0], 80)
-
-    if dataset_path is not None:
+    elif dataset_path is not None:
         transform = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
