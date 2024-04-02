@@ -93,7 +93,11 @@ def dataloaders(
 ) -> Tuple[DataLoader, DataLoader]:
 
     if is_bert:
-        return pretraining_dataset(dataset_path[0], 80), None
+        train_data = pretraining_dataset(dataset_path[0], 80), None
+        train_loader = DataLoader(train_data, shuffle=True,
+                                  batch_size=batch_size, num_workers=4,
+                                  pin_memory=True, drop_last=True)
+        return train_loader, None
 
     if dataset_path is not None:
         transform = transforms.Compose([
@@ -254,7 +258,7 @@ def cli(ctx: click.Context,
         rank == world - 1,
         workers[world-1],
         None if dataset_path is None else dataset_path.split(","),
-        model == "bert"
+        model_name == "bert"
     )
 
     # Optimizer with LR scheduler
