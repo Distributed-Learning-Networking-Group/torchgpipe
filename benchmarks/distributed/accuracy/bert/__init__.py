@@ -1,3 +1,4 @@
+from typing import Tuple
 import torch
 from bert.modeling import *
 
@@ -7,8 +8,8 @@ class BERT_HEAD(nn.Module):
         super(BERT_HEAD, self).__init__()
         self.layer6 = BertEmbeddings(30528, 1024, 512, 2, 0.1)
 
-    def forward(self, out0, out1, out2):
-        return self.layer6(out0, out1), out2
+    def forward(self, inputs: Tuple[torch.Tensor]):
+        return self.layer6(inputs[0], inputs[1]), inputs[2]
 
 
 class TransformerBlock(nn.Module):

@@ -18,6 +18,8 @@ import torchgpipe.distributed.context as gpipe_context
 from torchgpipe.balance import balance_by_time
 from torchgpipe.distributed.gpipe import DistributedGPipe, DistributedGPipeDataLoader
 import tqdm
+import h5py
+import numpy as np
 
 import resnet
 import vgg
@@ -47,6 +49,36 @@ MODELS: Dict[str, Callable[[int, int], torch.nn.Module]] = {
     'bert': bert.bert
 }
 
+class pretraining_dataset(torch.Dataset):
+
+    def __init__(self, input_file, max_pred_length):
+        self.input_file = input_file
+        self.max_pred_length = max_pred_length
+        f = h5py.File(input_file, "r")
+        keys = ['input_ids', 'input_mask', 'segment_ids', 'masked_lm_positions', 'masked_lm_ids',
+                'next_sentence_labels']
+        self.inputs = [np.asarray(f[key][:]) for key in keys]
+        f.close()
+
+    def __len__(self):
+        'Denotes the total number of samples'
+        return len(self.inputs[0])
+
+    def __getitem__(self, index):
+        [input_ids, input_mask, segment_ids, masked_lm_positions, masked_lm_ids, next_sentence_labels] = [
+            torch.from_numpy(input[index].astype(np.int64)) if indice < 5 else torch.from_numpy(
+                np.asarray(input[index].astype(np.int64))) for indice, input in enumerate(self.inputs)]
+
+        masked_lm_labels = torch.ones(input_ids.shape, dtype=torch.long) * -1
+        index = self.max_pred_length
+        # store number of  masked tokens in index
+        padded_mask_indices = (masked_lm_positions == 0).nonzero(as_tuple=False)
+        if len(padded_mask_indices) != 0:
+            index = padded_mask_indices[0].item()
+        masked_lm_labels[masked_lm_positions[:index]] = masked_lm_ids[:index]
+        # print("nsp_label",next_sentence_labels)
+        return (input_ids, segment_ids, input_mask), masked_lm_labels 
+
 
 def dataloaders(
         batch_size: int,
@@ -56,7 +88,11 @@ def dataloaders(
         last_stage_name,
         # [train dataset path, test dataset path]
         dataset_path: Tuple[str, str],
+        is_bert: bool,
 ) -> Tuple[DataLoader, DataLoader]:
+
+    if is_bert:
+        return pretraining_dataset(dataset_path[0], 80), None
 
     if dataset_path is not None:
         transform = transforms.Compose([
@@ -186,6 +222,8 @@ def cli(ctx: click.Context,
     if skip_epochs > epochs:
         ctx.fail('--skip-epochs=%d must be less than --epochs=%d' % (skip_epochs, epochs))
 
+    model_name = model
+
     relu_inplace = False
     model_raw = MODELS[model](num_classes=10, inplace=relu_inplace)
 
@@ -215,6 +253,7 @@ def cli(ctx: click.Context,
         rank == world - 1,
         workers[world-1],
         None if dataset_path is None else dataset_path.split(","),
+        model == "bert"
     )
 
     # Optimizer with LR scheduler
