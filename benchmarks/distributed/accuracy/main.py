@@ -369,10 +369,12 @@ def cli(ctx: click.Context,
         pbar = tqdm.tqdm(train_dataloader, unit="sample", unit_scale=float(batch_size))
         for input, targets in pbar:
             optimizer.zero_grad()
-            input[2] = input[2].unsqueeze(1).unsqueeze(2)
-            input[2] = input[2].to(dtype=torch.float32)  # fp16 compatibility
-            input[2] = (1.0 - input[2]) * -10000.0
-            outputs = model.forward(tuple(input))
+            if input is not None:
+                input[2] = input[2].unsqueeze(1).unsqueeze(2)
+                input[2] = input[2].to(dtype=torch.float32)  # fp16 compatibility
+                input[2] = (1.0 - input[2]) * -10000.0
+                input = tuple(input)
+            outputs = model.forward(input)
             if last_stage:
                 targets = targets.to(device=device, non_blocking=True)
                 for mbatch, output, target in zip(range(chunks), outputs, targets.chunk(chunks)):
