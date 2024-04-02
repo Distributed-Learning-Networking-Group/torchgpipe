@@ -33,7 +33,6 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 from torch.utils import checkpoint
 
-from file_utils import cached_path
 
 from torch.nn import Module
 from torch.nn.parameter import Parameter
@@ -55,6 +54,7 @@ CONFIG_NAME = 'bert_config.json'
 WEIGHTS_NAME = 'pytorch_model.bin'
 TF_WEIGHTS_NAME = 'model.ckpt'
 
+
 def load_tf_weights_in_bert(model, tf_checkpoint_path):
     """ Load tf checkpoints in a pytorch model
     """
@@ -64,7 +64,7 @@ def load_tf_weights_in_bert(model, tf_checkpoint_path):
         import tensorflow as tf
     except ImportError:
         print("Loading a TensorFlow models in PyTorch, requires TensorFlow to be installed. Please see "
-            "https://www.tensorflow.org/install/ for installation instructions.")
+              "https://www.tensorflow.org/install/ for installation instructions.")
         raise
     tf_path = os.path.abspath(tf_checkpoint_path)
     print("Converting TensorFlow checkpoint from {}".format(tf_path))
@@ -118,17 +118,20 @@ def load_tf_weights_in_bert(model, tf_checkpoint_path):
 
 @torch.jit.script
 def f_gelu(x):
-    return  x * 0.5 * (1.0 + torch.erf(x / 1.41421))
+    return x * 0.5 * (1.0 + torch.erf(x / 1.41421))
+
 
 @torch.jit.script
 def bias_gelu(bias, y):
     x = bias + y
-    return  x * 0.5 * (1.0 + torch.erf(x / 1.41421))
+    return x * 0.5 * (1.0 + torch.erf(x / 1.41421))
+
 
 @torch.jit.script
 def bias_tanh(bias, y):
     x = bias + y
     return torch.tanh(x)
+
 
 def gelu(x):
     """Implementation of the gelu activation function.
@@ -138,11 +141,13 @@ def gelu(x):
     """
     return f_gelu(x)
 
+
 def swish(x):
     return x * torch.sigmoid(x)
 
 
 ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish}
+
 
 class LinearActivation(Module):
     r"""Fused Linear and activation Module.
@@ -195,6 +200,7 @@ class LinearActivation(Module):
 class BertConfig(object):
     """Configuration class to store the configuration of a `BertModel`.
     """
+
     def __init__(self,
                  vocab_size_or_config_json_file,
                  hidden_size=768,
@@ -232,7 +238,7 @@ class BertConfig(object):
                 initializing all weight matrices.
         """
         if isinstance(vocab_size_or_config_json_file, str) or (sys.version_info[0] == 2
-                        and isinstance(vocab_size_or_config_json_file, unicode)):
+                                                               and isinstance(vocab_size_or_config_json_file, unicode)):
             with open(vocab_size_or_config_json_file, "r", encoding='utf-8') as reader:
                 json_config = json.loads(reader.read())
             for key, value in json_config.items():
@@ -280,6 +286,7 @@ class BertConfig(object):
         """Serializes this instance to a JSON string."""
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
+
 class BertLayerNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-12):
         """Construct a layernorm module in the TF style (epsilon inside the square root).
@@ -299,9 +306,11 @@ class BertLayerNorm(nn.Module):
     def extra_repr(self):
         return '{}'.format(self.hidden_size)
 
+
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings.
     """
+
     def __init__(self, vocab_size, hidden_size, max_position_embeddings, type_vocab_size, hidden_dropout_prob):
         super(BertEmbeddings, self).__init__()
         self.vocab_size = vocab_size
@@ -421,7 +430,8 @@ class BertSelfOutput(nn.Module):
 class BertAttention(nn.Module):
     def __init__(self, config):
         super(BertAttention, self).__init__()
-        self.self = BertSelfAttention(config.hidden_size, config.num_attention_heads, config.attention_probs_dropout_prob)
+        self.self = BertSelfAttention(
+            config.hidden_size, config.num_attention_heads, config.attention_probs_dropout_prob)
         self.output = BertSelfOutput(config)
 
     def forward(self, input_tensor, attention_mask):
@@ -433,7 +443,8 @@ class BertAttention(nn.Module):
 class BertIntermediate(nn.Module):
     def __init__(self, config):
         super(BertIntermediate, self).__init__()
-        self.dense_act = LinearActivation(config.hidden_size, config.intermediate_size, act=config.hidden_act)
+        self.dense_act = LinearActivation(
+            config.hidden_size, config.intermediate_size, act=config.hidden_act)
 
     def forward(self, hidden_states):
         hidden_states = self.dense_act(hidden_states)
@@ -467,6 +478,7 @@ class BertLayer(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
+
 class BertEncoder(nn.Module):
     def __init__(self, config):
         super(BertEncoder, self).__init__()
@@ -484,6 +496,7 @@ class BertEncoder(nn.Module):
     #     return all_encoder_layers
     def forward(self, hidden_states, attention_mask, output_all_encoded_layers=True, checkpoint_activations=False):
         all_encoder_layers = []
+
         def custom(start, end):
             def custom_forward(*inputs):
                 layers = self.layer[start:end]
@@ -498,11 +511,12 @@ class BertEncoder(nn.Module):
             num_layers = len(self.layer)
             chunk_length = math.ceil(math.sqrt(num_layers))
             while l < num_layers:
-                hidden_states = checkpoint.checkpoint(custom(l, l+chunk_length), hidden_states, attention_mask*1)
+                hidden_states = checkpoint.checkpoint(
+                    custom(l, l+chunk_length), hidden_states, attention_mask*1)
                 l += chunk_length
             # decoder layers
         else:
-            for i,layer_module in enumerate(self.layer):
+            for i, layer_module in enumerate(self.layer):
                 hidden_states = layer_module(hidden_states, attention_mask)
 
                 if output_all_encoded_layers:
@@ -512,7 +526,7 @@ class BertEncoder(nn.Module):
             all_encoder_layers.append(hidden_states)
         return all_encoder_layers
 
-#class BertEncoder(nn.Module):
+# class BertEncoder(nn.Module):
 #    def __init__(self, config):
 #        super(BertEncoder, self).__init__()
 #        layer = BertLayer(config)
@@ -545,6 +559,7 @@ class BertPooler(nn.Module):
     def __repr__(self):
         return 'BertPooler({})'.format(self.hidden_size)
 
+
 class BertAdd(nn.Module):
     def __init__(self, size):
         super(BertAdd, self).__init__()
@@ -558,16 +573,19 @@ class BertAdd(nn.Module):
     def __repr__(self):
         return 'BertAdd({})'.format(self.size)
 
+
 class BertPredictionHeadTransform(nn.Module):
     def __init__(self, config):
         super(BertPredictionHeadTransform, self).__init__()
-        self.dense_act = LinearActivation(config.hidden_size, config.hidden_size, act=config.hidden_act)
+        self.dense_act = LinearActivation(
+            config.hidden_size, config.hidden_size, act=config.hidden_act)
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=1e-12)
 
     def forward(self, hidden_states):
         hidden_states = self.dense_act(hidden_states)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
+
 
 class BertPreTrainingHeads(nn.Module):
     def __init__(self, config):
@@ -583,6 +601,7 @@ class BertPreTrainedModel(nn.Module):
     """ An abstract class to handle weights initialization and
         a simple interface for dowloading and loading pretrained models.
     """
+
     def __init__(self, config, *inputs, **kwargs):
         super(BertPreTrainedModel, self).__init__()
         if not isinstance(config, BertConfig):
@@ -676,7 +695,8 @@ class BertPreTrainedModel(nn.Module):
         model = cls(config, *inputs, **kwargs)
         if state_dict is None and not from_tf:
             weights_path = os.path.join(serialization_dir, WEIGHTS_NAME)
-            state_dict = torch.load(weights_path, map_location='cpu' if not torch.cuda.is_available() else None)
+            state_dict = torch.load(
+                weights_path, map_location='cpu' if not torch.cuda.is_available() else None)
         if tempdir:
             # Clean up temp dir
             shutil.rmtree(tempdir)
@@ -775,9 +795,11 @@ class BertModel(BertPreTrainedModel):
     all_encoder_layers, pooled_output = model(input_ids, token_type_ids, input_mask)
     ```
     """
+
     def __init__(self, config):
         super(BertModel, self).__init__(config)
-        self.embeddings = BertEmbeddings(config.vocab_size, config.hidden_size, config.max_position_embeddings, config.type_vocab_size, config.hidden_dropout_prob)
+        self.embeddings = BertEmbeddings(config.vocab_size, config.hidden_size,
+                                         config.max_position_embeddings, config.type_vocab_size, config.hidden_dropout_prob)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config.hidden_size)
         self.apply(self.init_bert_weights)
@@ -800,7 +822,8 @@ class BertModel(BertPreTrainedModel):
         # positions we want to attend and -10000.0 for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
+        extended_attention_mask = extended_attention_mask.to(
+            dtype=next(self.parameters()).dtype)  # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
         embedding_output = self.embeddings(input_ids, token_type_ids)
@@ -864,6 +887,7 @@ class BertForPreTraining(BertPreTrainedModel):
     masked_lm_logits_scores, seq_relationship_logits = model(input_ids, token_type_ids, input_mask)
     ```
     """
+
     def __init__(self, config):
         super(BertForPreTraining, self).__init__(config)
         self.bert = BertModel(config)
@@ -876,6 +900,7 @@ class BertForPreTraining(BertPreTrainedModel):
         seq_relationship_score = self.cls(pooled_output)
         return seq_relationship_score
 
+
 class CrossEntropyWrapper(nn.Module):
     def __init__(self, vocab_size):
         super(CrossEntropyWrapper, self).__init__()
@@ -884,7 +909,8 @@ class CrossEntropyWrapper(nn.Module):
 
     def forward(self, prediction_scores, masked_lm_labels=None):
         if masked_lm_labels is not None:
-            masked_lm_loss = self.cross_entropy(prediction_scores.view(-1, self.vocab_size), masked_lm_labels.view(-1))
+            masked_lm_loss = self.cross_entropy(
+                prediction_scores.view(-1, self.vocab_size), masked_lm_labels.view(-1))
             return masked_lm_loss
         else:
             return prediction_scores
