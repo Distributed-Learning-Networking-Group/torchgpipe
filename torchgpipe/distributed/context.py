@@ -1,193 +1,127 @@
-""" torhgpipe.distributed.context is used for message&data passing among workers
+""" torhgpipe.distributed.context is used internally for message&data passing among workers
 in distributed training setup.
-
-Internally, this module maintains a list of 'Queue[torch.TensorOrTensors]', which we call 'Channel'
-for passing activation/gradients during forward/backward pass.
-
 """
-from contextlib import contextmanager
+from abc import abstractmethod
+from concurrent.futures import Future, ThreadPoolExecutor
 from queue import Queue
-from typing import Callable, Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
+from torch.distributed import rpc
 
 from torch import Tensor
+
 
 Tensors = Tuple[Tensor, ...]
 TensorOrTensors = Union[Tensor, Tensors]
 Channel = Queue[TensorOrTensors]
 
 
-class TrainingContext:
+class ValueProcessor:
 
-    def __init__(self, context_name: str, microbatch_chunks: int) -> None:
-        self.forward_channels = [Channel() for _ in range(microbatch_chunks)]
-        self.backward_channels = [Channel() for _ in range(microbatch_chunks)]
-        self.target_channel = Channel()
+    @abstractmethod
+    def DTH(self, value: TensorOrTensors) -> TensorOrTensors:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def HTD(self, value: TensorOrTensors) -> TensorOrTensors:
+        raise NotImplementedError()
+
+
+def _on_send(
+    context_name: str,
+    value: TensorOrTensors,
+    target: bool = False,
+    backward: Optional[bool] = None,
+    microbatch_id: Optional[int] = None,
+):
+    ctx = DistributedContextRegistry.context(context_name)
+    channel = ctx.channel(target, backward, microbatch_id)
+    processed_value = ctx.processor.HTD(value)
+    print("on send", id(channel))
+    channel.put(processed_value)
+
+
+class DistributedContext:
+
+    def __init__(
+        self,
+        microbatches: int,
+        context_name: str,
+        value_processor: ValueProcessor
+    ):
+        self.processor = value_processor
         self.name = context_name
 
+        self.forward_channels = [Channel() for _ in range(microbatches)]
+        self.backward_channels = [Channel() for _ in range(microbatches)]
+        self.target_channel = Channel()
 
-class GlobalContext:
-    """Instead of Global variables, we use an Class variable to store Training Contexts,
-    indexed by their context_names
-    """
+        self._executor = ThreadPoolExecutor(8)
 
-    ctxs: Dict[str, TrainingContext] = {}
+    def channel(
+        self,
+        target: bool,
+        backward: Optional[bool],
+        microbatch_id: Optional[int]
+    ) -> Channel:
+        if target:
+            channel = self.target_channel
+        else:
+            channels = self.backward_channels \
+                if backward else self.forward_channels
+            channel = channels[microbatch_id]
+        return channel
+
+    def put_remote(
+        self,
+        remote_name: str,
+        value: TensorOrTensors,
+        target: bool = False,
+        *,
+        backward: Optional[bool] = None,
+        microbatch_id: Optional[int] = None,
+    ) -> Future[None]:
+        def send_task():
+            processed_value = self.processor.DTH(value)
+            rpc.remote(
+                remote_name, _on_send, args=(
+                    remote_name, processed_value, target, backward, microbatch_id
+                )
+            )
+        return self._executor.submit(send_task)
+
+    def get_remote(
+        self,
+        target: bool,
+        *,
+        backward: Optional[bool] = None,
+        microbatch_id: Optional[int] = None,
+    ) -> TensorOrTensors:
+        channel = self.channel(target, backward, microbatch_id)
+        print(id(channel), "get")
+        return channel.get()
+
+    def shutdown(self):
+        self._executor.shutdown()
+
+
+class DistributedContextRegistry:
+
+    _ctxs: Dict[str, DistributedContext] = {}
 
     @staticmethod
-    def get_context(context_name: str):
+    def context(context_name: str):
         # TODO: error handling
-        return GlobalContext.ctxs[context_name]
+        return DistributedContextRegistry._ctxs[context_name]
 
+    @staticmethod
+    def registrate(context: DistributedContext):
+        context_name = context.name
+        if context_name in DistributedContextRegistry._ctxs:
+            raise ValueError(f"context {context_name} alread exists.")
+        DistributedContextRegistry._ctxs[context_name] = context
 
-@contextmanager
-def worker(context_name: str, microbatch_chunks: int):
-    """context manager for training context 
-
-    Args:
-        context_name (str): context name for the worker, must be globally unique 
-        microbatch_chunks (int): number of microbatch chunks in the gpipe training setup.
-
-
-    Examples:
-
-    context_name = "worker0"
-
-    with worker(context_name):
-        train()
-        ...
-
-    """
-    if context_name in GlobalContext.ctxs:
-        raise RuntimeError(f"worker {context_name} already exists")
-    ctx = TrainingContext(context_name, microbatch_chunks)
-    GlobalContext.ctxs[context_name] = ctx
-    yield
-    del GlobalContext.ctxs[context_name]
-
-
-def distributed(context_name: str, microbatch_chunks):
-    """Decorator around torchgpipe.context.worker
-
-    Args:
-        context_name (str): context name for the worker, must be globally unique 
-        microbatch_chunks (int): number of microbatch chunks in the gpipe training setup.
-
-    Examples:
-    context_name = "worker0"
-
-    @distributed(context_name)
-    def train(...):
-        ...
-
-    train(...)
-
-    Equivalent to:
-
-    with worker(context_name):
-        train()
-    """
-    def decorator(func: Callable):
-        def forwarder(*args, **kwargs):
-            with worker(context_name, microbatch_chunks):
-                func(*args, **kwargs)
-        return forwarder
-    return decorator
-
-
-def put_forward(context_name: str, id: int, value: TensorOrTensors):
-    """Put given tensor or tensors to the given channel in context 'context_name'
-    with id 'id'
-
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-        value (TensorOrTensors): tensor or tensors to be put 
-
-    Examples:
-
-    with worker("worker0"):
-        ...
-        // microbatch id 3,  
-        value = compute() 
-        rpc.Call(put_forward, args=("worker1", 3, value))
-        ...
-
-    """
-    ctx = GlobalContext.get_context(context_name)
-    ctx.forward_channels[id].put(value)
-
-
-def get_forward(name: str, id: int) -> TensorOrTensors:
-    """Get given tensor or tensors to the given channel in context 'context_name'
-    with id 'id'
-
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-
-    Returns:
-        TensorOrTensors: value that was put in the given channel. 
-
-    Examples:
-
-    with worker("worker0"):
-        ...
-        // microbatch id 3,  
-        value = compute() 
-        rpc.Call(get_forward, args=("worker1", 3, value))
-        ...
-
-    """
-    ctx = GlobalContext.get_context(name)
-    return ctx.forward_channels[id].get()
-
-
-def put_backward(name: str, id: int, value: TensorOrTensors):
-    """see also 'put_forward'
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-        value (TensorOrTensors): tensor or tensors to be put 
-    """
-    ctx = GlobalContext.get_context(name)
-    return ctx.backward_channels[id].put(value)
-
-
-def get_backward(name: str, id: int) -> TensorOrTensors:
-    """see also 'get_forward'
-
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-
-
-    Returns:
-        TensorOrTensors: value that was put in the given channel. 
-    """
-    ctx = GlobalContext.get_context(name)
-    return ctx.backward_channels[id].get()
-
-
-def put_target(name: str, value: TensorOrTensors) -> TensorOrTensors:
-    """see also 'put_forward'
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-        value (TensorOrTensors): tensor or tensors to be put 
-    """
-    ctx = GlobalContext.get_context(name)
-    return ctx.target_channel.put(value)
-
-
-def get_target(name: str) -> TensorOrTensors:
-    """see also 'get_forward'
-
-    Args:
-        name (str): context name for the worker, must be globally unique 
-        id (int): channel id the 'value' will be put in
-
-
-    Returns:
-        TensorOrTensors: value that was put in the given channel. 
-    """
-    ctx = GlobalContext.get_context(name)
-    return ctx.target_channel.get()
+    @staticmethod
+    def deregistrate(context_name: str):
+        ctx = DistributedContextRegistry.context(context_name)
+        ctx.shutdown()
+        del DistributedContextRegistry._ctxs[context_name]

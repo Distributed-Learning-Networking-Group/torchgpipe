@@ -1,146 +1,187 @@
-from queue import Queue
-from typing import Any, Dict
-from unittest.mock import patch
+from typing import Any, List
+from unittest import mock
 
 import pytest
 import torch
-from torch import nn
-import torch.utils
-import torchvision
+from torch import Tensor, nn
 from torch.utils.data import dataloader
+import torchvision
 
-from torchgpipe.checkpoint import TensorOrTensors
-from torchgpipe.distributed.context import TrainingContext
-from torchgpipe.distributed.gpipe import (DistributedGPipe, DistributedGPipeDataLoader,
-                                          get_module_partition)
-
-Channels = Dict[int, Queue]
+from torchgpipe import distributed
+from torchgpipe.distributed import gpipe, run
 
 
-def detach(value: TensorOrTensors):
-    if isinstance(value, tuple):
-        ret = tuple(None if v is None else v.detach()
-                    for v in value)
-        for i, v in enumerate(value):
-            if v is not None and v.requires_grad:
-                ret[i].requires_grad_()
-        return ret
-    ret = None if value is None else value.detach()
-    if ret is not None and value.requires_grad:
-        ret.requires_grad_()
-    return ret
+class FakeRpc:
+
+    @staticmethod
+    def remote(
+        to: Any,  # pylint: disable=unused-argument
+        func: Any,
+        args: Any | None = None,
+        kwargs: Any | None = None,
+        timeout: float = None  # pylint: disable=unused-argument
+    ):
+        if args is None:
+            args = ()
+        if kwargs is None:
+            kwargs = {}
+        func(*args, **kwargs)
 
 
-class FakeTrainingGloablContext:
-
-    def __init__(self, microbatch_chunks: int) -> None:
-        self.ctxs: Dict[str, TrainingContext] = {}
-        self.microbatch_chunks = microbatch_chunks
-
-    def fake_get(self, name: str, id: int, backward=False):
-        ctx = self.ctxs.setdefault(name, TrainingContext(name, self.microbatch_chunks))
-        if backward:
-            channels = ctx.backward_channels
-        else:
-            channels = ctx.forward_channels
-        return channels[id].get()
-
-    def fake_put(self, name: str, id: int, value: Any, backward=False):
-        ctx = self.ctxs.setdefault(name, TrainingContext(name, self.microbatch_chunks))
-        if backward:
-            channels = ctx.backward_channels
-        else:
-            channels = ctx.forward_channels
-        value = detach(value)
-        return channels[id].put(value)
+def _names(prefix: str, num_stages: int):
+    return {
+        i: f"{prefix}_worker{i}" for i in range(num_stages)
+    }
 
 
-@pytest.fixture
-def module():
+def _module():
     net = nn.Sequential(nn.Flatten(),
                         nn.Linear(784, 256),
                         nn.ReLU(),
                         nn.Linear(256, 10))
 
     def init_weights(m):
-        if type(m) == nn.Linear:
+        if isinstance(m, nn.Linear):
             nn.init.normal_(m.weight, std=0.01)
 
     net.apply(init_weights)
     return net
 
 
-def _workers(num: int):
-    workers = {}
-    for i in range(num):
-        workers[i] = f"worker{i}"
-    return workers
+@pytest.fixture
+def module():
+    return _module()
 
 
 @pytest.fixture
-def workers():
-    return _workers(3)
-
-
-@pytest.mark.parametrize('balance', [
-    [1, 1, 1, 1],
-    [1, 2, 1],
-    [3, 1]
-])
-def test_module_partition(module, balance):
-    for rank, b in enumerate(balance):
-        part = get_module_partition(module, rank, balance, None)
-        assert len(part) == b
+def data_loader():
+    batch_size = 32
+    trans = torchvision.transforms.ToTensor()
+    mnist_train = torchvision.datasets.FashionMNIST(
+        root="./data", train=True, transform=trans, download=True)
+    train_iter = dataloader.DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
+    return train_iter
 
 
 @pytest.mark.timeout(10)
-@pytest.mark.parametrize('balance', [[2, 1, 1]])
-def test_pipeline(module, workers, balance):
-    global_ctx = FakeTrainingGloablContext(32)
-    with patch.object(DistributedGPipe, "_get", global_ctx.fake_get), \
-            patch.object(DistributedGPipe, "_put", global_ctx.fake_put):
+@mock.patch("torchgpipe.distributed.context.rpc", FakeRpc())
+def test_distributed_dataloader(data_loader):
+    num_stage = 3
+    num_microbatchs = 8
+    names = _names(
+        "test_distributed_dataloader", num_stage
+    )
 
-        world_size = len(balance)
-        module.train()
-        partitions = [
-            DistributedGPipe(module, i, workers, balance, 1) for i in range(world_size)
+    device = torch.device("cpu")
+
+    with run(names[0], num_microbatchs, device), \
+            run(names[1], num_microbatchs, device), \
+            run(names[2], num_microbatchs, device):
+
+        loaders = [
+            gpipe.DistributedGPipeDataLoader(
+                names[i],
+                data_loader,
+                num_microbatchs,
+                len(data_loader),
+                i == 0,
+                i == (num_stage - 1),
+                names[num_stage - 1],
+            )
+            for i in range(num_stage)
         ]
-        fake_data = torch.randn([5, 28, 28])
-        fake_target = torch.randn([5, 10])
-        for i, part in enumerate(partitions):
-            output = part.forward(0, fake_data if i == 0 else None)
-        loss = nn.CrossEntropyLoss()
-        output = loss(output, fake_target)
 
-        for i in reversed(range(world_size)):
-            loss_v = output if (i == world_size - 1) else None
-            partitions[i].backward(0, loss_v)
+        for loader in loaders:
+            assert (len(loader) == len(data_loader))
+
+        for i, loader in enumerate(loaders):
+            data, target = next(iter(loader))
+            if i == 0:
+                assert (data is not None and target is None)
+            if i == 1:
+                assert (data is None and target is None)
+            if i == 2:
+                assert (data is None and target is not None)
 
 
 @pytest.mark.timeout(10)
-@pytest.mark.parametrize("batch_size,chunks", [[32, 3]])
-def test_distributed_data_loader(batch_size: int, chunks: int):
-    global_ctx = FakeTrainingGloablContext(chunks)
-    with patch.object(DistributedGPipeDataLoader, "_put", global_ctx.fake_put), \
-            patch.object(DistributedGPipeDataLoader, "_get", global_ctx.fake_get):
-        trans = torchvision.transforms.ToTensor()
-        mnist_train = torchvision.datasets.FashionMNIST(
-            root="./data", train=True, transform=trans, download=True)
-        train_iter = dataloader.DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
+@mock.patch("torchgpipe.distributed.context.rpc", FakeRpc())
+def test_gpipe_train(module, data_loader):
 
-        num_iteration = 1000
-        loader0 = DistributedGPipeDataLoader(
-            train_iter, 0, chunks, num_iteration, False, "worker2")
-        loader1 = DistributedGPipeDataLoader(
-            train_iter, 1, chunks, num_iteration, False, "worker2")
-        loader2 = DistributedGPipeDataLoader(
-            train_iter, 2, chunks, num_iteration, True, "worker2")
-        cnt = 0
+    num_stage = 3
+    num_microbatchs = 8
+    names = _names(
+        "test_gpipe_train", num_stage
+    )
+    balance = [1, 2, 1]
 
-        for d0, d1, d2 in zip(loader0, loader1, loader2):
-            assert d0[0] is not None and d0[1] is None
-            assert d1[0] is None and d1[1] is None
-            assert d2[0] is None and d2[1] is not None
-            cnt += 1
+    device = torch.device("cpu")
 
-        assert cnt == (num_iteration * chunks)
+    module_validate = _module()
+    module_validate.load_state_dict(module.state_dict())
+
+    with run(names[0], num_microbatchs, device), \
+            run(names[1], num_microbatchs, device), \
+            run(names[2], num_microbatchs, device):
+        loaders = [
+            iter(gpipe.DistributedGPipeDataLoader(
+                names[i],
+                data_loader,
+                num_microbatchs,
+                len(data_loader),
+                i == 0,
+                i == (num_stage - 1),
+                names[num_stage - 1],
+            ))
+            for i in range(num_stage)
+        ]
+
+        modules = [
+            gpipe.DistributedGPipe(
+                module,
+                i,
+                names,
+                balance=balance,
+                microbatch_chunks=num_microbatchs,
+                device=device
+            )
+            for i in range(num_stage)
+        ]
+
+        data = None
+        target = None
+        outputs = None
+        validate_data = None
+        validate_target = None
+        loss = torch.nn.CrossEntropyLoss()
+
+        # run gpipe module
+        for data_iter, stage in zip(loaders, modules):
+            stage.model().train()
+            data, target = next(data_iter)
+            validate_data = data if data is not None else validate_data
+            validate_target = target if target is not None else validate_target
+            outputs = stage.forward(data)
+
+        losses = distributed.loss(outputs, target, loss)
+
+        for stage in reversed(modules):
+            stage.backward(losses if stage.is_last_stage() else None)
+
+        # run validate module
+        module_validate.train()
+        output = module_validate(validate_data)
+        loss_value = loss(output, validate_target)
+        loss_value.backward()
+
+        # grab gpipe&validate module paramters for comparision
+        gpipe_params: List[Tensor] = []
+        for m in modules:
+            gpipe_params.extend(m.model().parameters())
+        validate_params = [p for p in module_validate.parameters()]
+
+        assert len(validate_params) == len(gpipe_params)
+
+        for param, param_valid in zip(gpipe_params, validate_params):
+            assert param.shape == param_valid.shape
+            assert torch.allclose(param.grad, param_valid.grad)
