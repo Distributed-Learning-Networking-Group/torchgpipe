@@ -2,7 +2,11 @@ import torch
 import torchgpipe.distributed.context as context
 
 
-def to(device: torch.device, value: context.TensorOrTensors, non_blocking: bool):
+def to(
+    device: torch.device,
+    value: context.TensorOrTensors,
+    non_blocking: bool = True
+):
     if value is None:
         return None
     if not isinstance(value, tuple):
@@ -24,17 +28,25 @@ def to(device: torch.device, value: context.TensorOrTensors, non_blocking: bool)
 
 class CudaValueCopyProcessor(context.ValueProcessor):
 
-    def __init__(self, device: torch.device) -> None:
+    def __init__(self, device: torch.device, microbatches: int) -> None:
         super().__init__()
         self._device = device
-        self._stream = torch.cuda.Stream(device)
+        self._streams = [torch.cuda.Stream(device)
+                         for _ in range(microbatches)]
 
-    def DTH(self, value: context.TensorOrTensors):
-        with torch.cuda.stream(self._stream):
-            value_processed = to(torch.device("cpu"), value, True)
+    def device_to_host(self, value: context.TensorOrTensors, mbatch: int):
+        stream_ = None if mbatch is None else self._streams[mbatch]
+        with torch.cuda.stream(stream_):
+            torch.cuda.current_stream().wait_stream(torch.cuda.default_stream())
+            value_processed = to(torch.device("cpu"), value)
         return value_processed
 
-    def HTD(self, value: context.TensorOrTensors):
-        with torch.cuda.stream(self._stream):
-            value_processed = to(self._device, value, True)
+    def host_to_device(self, value: context.TensorOrTensors, mbatch: int):
+        stream_ = None if mbatch is None else self._streams[mbatch]
+        with torch.cuda.stream(stream_):
+            value_processed = to(self._device, value, False)
         return value_processed
+
+    def sync(self, mbatch: int):
+        if mbatch is not None:
+            self._streams[mbatch].synchronize()

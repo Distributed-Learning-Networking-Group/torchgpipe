@@ -56,7 +56,7 @@ class FakeRpc:
 
 
 @pytest.mark.timeout(10)
-def test_context_target():
+def test_context_forward_backward():
     context_name = "test_context_put"
     with mock.patch("torchgpipe.distributed.context.rpc", FakeRpc()):
         value_processor = MagicMock()
@@ -65,41 +65,12 @@ def test_context_target():
         )
         context.DistributedContextRegistry.registrate(ctx)
         value = torch.tensor([1.0])
-        ctx.put_remote(context_name, value, True).result()
-        value_processor.DTH.assert_called_with(value)
-
-        ret = value_processor.DTH.return_value
-        value_ = ctx.get_remote(True)
-        value_processor.HTD.assert_called_with(ret)
-        assert value_ is value_processor.HTD.return_value
-
-
-@pytest.mark.timeout(10)
-def test_context_forward_backward():
-    context_name = "test_context_forward_backward"
-    with mock.patch("torchgpipe.distributed.context.rpc", FakeRpc()):
-        value_processor = MagicMock()
-        ctx = context.DistributedContext(
-            MICROBATCHES, context_name, value_processor
-        )
-        context.DistributedContextRegistry.registrate(ctx)
-
-        # test forward, microbatch_id == 7
-        value = torch.tensor([1.0])
         ctx.put_remote(context_name, value, False, backward=False, microbatch_id=7).result()
-        value_processor.DTH.assert_called_with(value)
+        value_processor.device_to_host.assert_called_with(value, 7)
 
-        ret = value_processor.DTH.return_value
+        value_processor.sync.assert_called_with(7)
+
         value_ = ctx.get_remote(False, backward=False, microbatch_id=7)
-        value_processor.HTD.assert_called_with(ret)
-        assert value_ is value_processor.HTD.return_value
-
-        # test backward, microbatch_id == 3
-        value = torch.tensor([1.0])
-        ctx.put_remote(context_name, value, False, backward=True, microbatch_id=3).result()
-        value_processor.DTH.assert_called_with(value)
-
-        ret = value_processor.DTH.return_value
-        value_ = ctx.get_remote(False, backward=True, microbatch_id=3)
-        value_processor.HTD.assert_called_with(ret)
-        assert value_ is value_processor.HTD.return_value
+        ret = value_processor.device_to_host.return_value
+        value_processor.host_to_device.assert_called_with(ret, 7)
+        assert value_ is value_processor.host_to_device.return_value

@@ -18,11 +18,15 @@ Channel = Queue[TensorOrTensors]
 class ValueProcessor:
 
     @abstractmethod
-    def DTH(self, value: TensorOrTensors) -> TensorOrTensors:
+    def device_to_host(self, value: TensorOrTensors, mbatch: int) -> TensorOrTensors:
         raise NotImplementedError()
 
     @abstractmethod
-    def HTD(self, value: TensorOrTensors) -> TensorOrTensors:
+    def host_to_device(self, value: TensorOrTensors, mbatch: int) -> TensorOrTensors:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def sync(self, mbatch: int) -> TensorOrTensors:
         raise NotImplementedError()
 
 
@@ -35,8 +39,7 @@ def _on_send(
 ):
     ctx = DistributedContextRegistry.context(context_name)
     channel = ctx.channel(target, backward, microbatch_id)
-    processed_value = ctx.processor.HTD(value)
-    print("on send", id(channel))
+    processed_value = ctx.processor.host_to_device(value, microbatch_id)
     channel.put(processed_value)
 
 
@@ -81,7 +84,8 @@ class DistributedContext:
         microbatch_id: Optional[int] = None,
     ) -> Future[None]:
         def send_task():
-            processed_value = self.processor.DTH(value)
+            processed_value = self.processor.device_to_host(value, microbatch_id)
+            self.processor.sync(microbatch_id)
             rpc.remote(
                 remote_name, _on_send, args=(
                     remote_name, processed_value, target, backward, microbatch_id
@@ -97,8 +101,9 @@ class DistributedContext:
         microbatch_id: Optional[int] = None,
     ) -> TensorOrTensors:
         channel = self.channel(target, backward, microbatch_id)
-        print(id(channel), "get")
-        return channel.get()
+        value = channel.get()
+        self.processor.sync(microbatch_id)
+        return value
 
     def shutdown(self):
         self._executor.shutdown()

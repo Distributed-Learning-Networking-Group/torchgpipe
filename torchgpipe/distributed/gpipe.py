@@ -50,7 +50,8 @@ def get_module_partition(module: nn.Sequential,
         raise BalanceError('module and sum of balance have different length '
                            f'(module: {len(module)}, sum of balance: {sum(balance)})')
     if any(x <= 0 for x in balance):
-        raise BalanceError(f'all balance numbers must be positive integer (balance: {balance})')
+        raise BalanceError(
+            f'all balance numbers must be positive integer (balance: {balance})')
 
     j = 0
     layers: NamedModules = OrderedDict()
@@ -116,16 +117,21 @@ class DistributedGPipe:
 
         self._is_last_stage = self.rank == self.world_size - 1
 
-        self._inputs: List[Optional[DistributedBatch]] = [None for _ in range(microbatch_chunks)]
-        self._outputs: List[Optional[DistributedBatch]] = [None for _ in range(microbatch_chunks)]
+        self._inputs: List[Optional[DistributedBatch]] = [
+            None for _ in range(microbatch_chunks)]
+        self._outputs: List[Optional[DistributedBatch]] = [
+            None for _ in range(microbatch_chunks)]
 
-        self._forward_futures: List[Future[None]] = [None for _ in range(microbatch_chunks)]
-        self._backward_futures: List[Future[None]] = [None for _ in range(microbatch_chunks)]
+        self._forward_futures: List[Future[None]] = [
+            None for _ in range(microbatch_chunks)]
+        self._backward_futures: List[Future[None]] = [
+            None for _ in range(microbatch_chunks)]
 
         self._context = context.DistributedContextRegistry.context(self.name)
 
         if deferred_batch_norm:
-            module = DeferredBatchNorm.convert_deferred_batch_norm(module, microbatch_chunks)
+            module = DeferredBatchNorm.convert_deferred_batch_norm(
+                module, microbatch_chunks)
 
     def _previous_worker(self) -> Optional[str]:
         if self.rank == 0:
@@ -146,16 +152,17 @@ class DistributedGPipe:
     def forward(self, batch: Optional[TensorOrTensors]) -> List[DistributedBatch]:
         if self.rank == 0:
             microbatch.check(batch)
-            training_datas_host = microbatch.scatter(batch, self.chunks)
-            training_datas = [self._context.processor.HTD(batch.value)
-                              for batch in training_datas_host]
+            training_datas_batches = microbatch.scatter(batch, self.chunks)
+            training_datas = [batch.value
+                              for batch in training_datas_batches]
 
         for mbatch in range(self.chunks):
 
             if self.rank == 0:
                 inputs = training_datas[mbatch]
             else:
-                inputs = self._context.get_remote(False, backward=False, microbatch_id=mbatch)
+                inputs = self._context.get_remote(
+                    False, backward=False, microbatch_id=mbatch)
 
             self._inputs[mbatch] = DistributedBatch(inputs)
             outputs = self.module(inputs)
@@ -180,7 +187,8 @@ class DistributedGPipe:
             if self.rank == (self.world_size - 1):
                 losses[mbatch].backward()
             else:
-                values = self._context.get_remote(False, backward=True, microbatch_id=mbatch)
+                values = self._context.get_remote(
+                    False, backward=True, microbatch_id=mbatch)
                 outputs = self._outputs[mbatch].requires_grad_trait()
                 autograd.backward(outputs, values)
 
@@ -253,7 +261,7 @@ class DistributedGPipeDataLoader:
         for (data, target), _ in zip(self._data_loader, range(self._num_iterations)):
             self._context.put_remote(
                 self._last_stage_name, target, True
-            )
+            ).result()  # propagate errors
             yield (data, None)
 
     def _middle_stage_iter(self):
@@ -269,7 +277,7 @@ class DistributedGPipeDataLoader:
         """ iterator for only one worker
         """
         for (data, target), _ in zip(self._data_loader, range(self._num_iterations)):
-            yield self._context.processor.HTD((data, target))
+            yield data, target
 
     def __iter__(self):
         if self._last_stage and self._first_stage:

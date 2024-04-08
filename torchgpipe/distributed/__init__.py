@@ -27,11 +27,14 @@ class CpuDetachProcessor(context.ValueProcessor):
             return value_
         raise ValueError(f"invalid value:{value}, expected tensor or tuple of tensor")
 
-    def DTH(self, value: TensorOrTensors):
+    def device_to_host(self, value: TensorOrTensors, mbatch: int):
         return self._detach(value)
 
-    def HTD(self, value: TensorOrTensors):
+    def host_to_device(self, value: TensorOrTensors, mbatch: int):
         return self._detach(value)
+
+    def sync(self, mbatch: int):
+        return
 
 
 @contextlib.contextmanager
@@ -41,7 +44,7 @@ def run(
     device: torch.device
 ):
     if device.type == "cuda":
-        value_processor = cuda.CudaValueCopyProcessor(device)
+        value_processor = cuda.CudaValueCopyProcessor(device, microbatches)
     elif device.type == "cpu":
         value_processor = CpuDetachProcessor()
     else:
