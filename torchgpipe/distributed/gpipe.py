@@ -4,7 +4,7 @@
 
 from collections import OrderedDict
 from concurrent.futures import Future
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from torch import Tensor, autograd, nn
@@ -149,12 +149,18 @@ class DistributedGPipe:
     def model(self):
         return self.module
 
-    def forward(self, batch: Optional[TensorOrTensors]) -> List[DistributedBatch]:
+    def forward(
+        self,
+        batch: Optional[TensorOrTensors],
+        on_compute_start: Optional[Callable] = None,
+    ) -> List[DistributedBatch]:
         if self.rank == 0:
             microbatch.check(batch)
             training_datas_batches = microbatch.scatter(batch, self.chunks)
             training_datas = [batch.value
                               for batch in training_datas_batches]
+
+        compute_started = False
 
         for mbatch in range(self.chunks):
 
@@ -163,6 +169,11 @@ class DistributedGPipe:
             else:
                 inputs = self._context.get_remote(
                     False, backward=False, microbatch_id=mbatch)
+
+            if not compute_started:
+                if on_compute_start is not None:
+                    on_compute_start()
+                compute_started = True
 
             self._inputs[mbatch] = DistributedBatch(inputs)
             outputs = self.module(inputs)
@@ -181,7 +192,14 @@ class DistributedGPipe:
 
         return self._outputs
 
-    def backward(self, losses: Optional[List[Tensor]]):
+    def backward(
+        self,
+        losses: Optional[List[Tensor]],
+        on_compute_start: Optional[Callable] = None,
+    ):
+
+        compute_started = False
+
         for mbatch in range(self.chunks):
 
             if self.rank == (self.world_size - 1):
@@ -189,6 +207,10 @@ class DistributedGPipe:
             else:
                 values = self._context.get_remote(
                     False, backward=True, microbatch_id=mbatch)
+                if not compute_started:
+                    if on_compute_start is not None:
+                        on_compute_start()
+                        compute_started = True
                 outputs = self._outputs[mbatch].requires_grad_trait()
                 autograd.backward(outputs, values)
 
